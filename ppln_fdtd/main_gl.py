@@ -95,7 +95,8 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info):
     max_e1 = float(E1.max()) if hasattr(E1, 'max') else 0
     max_e2 = float(E2.max()) if hasattr(E2, 'max') else 0
 
-    e_now, e_ref, e_drift = energy_info
+    e_now, e_ref = energy_info
+    e_ratio = f"{e_now / e_ref:.10f}" if e_ref > 0 else "—"
 
     lines = [
         f"  PPLN 1D FDTD Explorer          {'[PAUSED]' if paused else ''}",
@@ -104,7 +105,7 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info):
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
         f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}",
-        f"  energy = {e_now:.6e}   drift = {e_drift:+.2e}%  (Verlet/leapfrog)",
+        f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}",
         f"",
     ]
 
@@ -161,33 +162,39 @@ def main():
     show_help = False
     steps_per_frame = 500
     spf_min, spf_max = 10, 100000
-    pending_keys = []  # for GLFW fallback
+    pending_keys = []  # GLFW key events (always active)
 
-    # ── GLFW key fallback (when no tty) ──
-    if not term.active:
-        KEY_MAP = {
-            glfw.KEY_SPACE: ' ', glfw.KEY_R: 'r', glfw.KEY_H: 'h',
-            glfw.KEY_Q: 'q', glfw.KEY_ESCAPE: 'ESC',
-            glfw.KEY_UP: 'UP', glfw.KEY_DOWN: 'DOWN',
-            glfw.KEY_L: 'l', glfw.KEY_SEMICOLON: ';',
-            glfw.KEY_T: 't', glfw.KEY_Y: 'y',
-            glfw.KEY_B: 'b', glfw.KEY_N: 'n',
-            glfw.KEY_P: 'p', glfw.KEY_O: 'o',
-        }
+    # ── GLFW key input (always active, works from both windows) ──
+    GLFW_KEY_MAP = {
+        glfw.KEY_SPACE: ' ', glfw.KEY_R: 'r', glfw.KEY_H: 'h',
+        glfw.KEY_Q: 'q', glfw.KEY_ESCAPE: 'q',
+        glfw.KEY_L: 'l', glfw.KEY_SEMICOLON: ';',
+        glfw.KEY_T: 't', glfw.KEY_Y: 'y',
+        glfw.KEY_B: 'b', glfw.KEY_N: 'n',
+        glfw.KEY_P: 'p', glfw.KEY_O: 'o',
+        glfw.KEY_EQUAL: '+', glfw.KEY_MINUS: '-',
+        glfw.KEY_KP_ADD: '+', glfw.KEY_KP_SUBTRACT: '-',
+    }
 
-        def on_key(win, key, scancode, action, mods):
-            if action in (glfw.PRESS, glfw.REPEAT) and key in KEY_MAP:
-                pending_keys.append(KEY_MAP[key])
+    def on_key(win, key, scancode, action, mods):
+        if action in (glfw.PRESS, glfw.REPEAT) and key in GLFW_KEY_MAP:
+            pending_keys.append(GLFW_KEY_MAP[key])
 
-        glfw.set_key_callback(window, on_key)
+    glfw.set_key_callback(window, on_key)
 
     frame_count = 0
     fps_time = time.perf_counter()
     fps = 0.0
-    energy_ref = 0.0  # set after source has fired
+    energy_ref = 0.0  # set when pulse reaches crystal center
     energy_now = 0.0
-    energy_drift = 0.0
     energy_ref_set = False
+    # Time for pulse center to reach crystal midpoint
+    crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
+    v_vac = sim.courant  # cells/step in vacuum
+    v_xtal = sim.courant / sim.n1  # cells/step in crystal
+    steps_to_mid = ((sim.crystal_start - sim.source_idx) / v_vac
+                    + (crystal_mid - sim.crystal_start) / v_xtal)
+    energy_ref_time_ps = (sim.t0 + steps_to_mid * sim.dt) * 1e12
 
     try:
         while not glfw.window_should_close(window):
@@ -251,17 +258,12 @@ def main():
 
                 # Energy check (GPU reduction, ~1x per status update)
                 energy_now = sim.get_energy()
-                # Set reference after source pulse has mostly fired (t > 5*t0)
-                if not energy_ref_set and sim.current_time_ps > sim.t0 * 1e12 * 1.2 and energy_now > 0:
+                if not energy_ref_set and sim.current_time_ps >= energy_ref_time_ps and energy_now > 0:
                     energy_ref = energy_now
                     energy_ref_set = True
-                if energy_ref > 0:
-                    energy_drift = (energy_now - energy_ref) / energy_ref * 100
-                else:
-                    energy_drift = 0.0
 
                 print_status(sim, steps_per_frame, fps, paused, show_help,
-                             (energy_now, energy_ref, energy_drift))
+                             (energy_now, energy_ref))
 
     finally:
         term.restore()
