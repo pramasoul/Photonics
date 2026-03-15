@@ -290,10 +290,10 @@ class Renderer:
         e2 = E2[idx]
         d_z = self._d_z_cache[idx]
 
-        max_e1 = max(np.max(np.abs(e1)), 1e-10)
-        max_e2 = max(np.max(np.abs(e2)), 1e-10)
-        scale1 = min(max_e1, 2.0)
-        scale2 = max(scale1 * 0.3, max_e2)
+        max_e1 = max(np.max(np.abs(e1)), 1e-30)
+        max_e2 = max(np.max(np.abs(e2)), 1e-30)
+        scale1 = max_e1
+        scale2 = max(max_e1 * 0.1, max_e2)  # E2 gets extra gain if weak
 
         data = self.field_data
         data[0, :len(idx), 0] = e1 / scale1
