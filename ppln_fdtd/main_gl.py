@@ -81,7 +81,13 @@ def load_config(args):
         with open(config_path) as f:
             file_cfg = yaml.safe_load(f) or {}
         for k, v in file_cfg.items():
-            if k in cfg:
+            if k in cfg and v is not None:
+                # Coerce to match default's type
+                default_val = DEFAULTS[k]
+                if isinstance(default_val, float) and not isinstance(v, (int, float)):
+                    v = float(v)
+                elif isinstance(default_val, int) and not isinstance(v, int):
+                    v = int(v)
                 cfg[k] = v
 
     # CLI overrides (only if explicitly set)
