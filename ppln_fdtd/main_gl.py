@@ -252,6 +252,7 @@ def main():
                 elif key == 'r':
                     sim.reset()
                     energy_ref_set = False
+                    renderer.reset_spectrum_scale()
                 elif key == 'f':
                     renderer.toggle_nearest()
                     needs_redraw[0] = True

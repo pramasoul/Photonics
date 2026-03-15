@@ -176,6 +176,10 @@ class Renderer:
         self._k2 = sim.n2 / (sim.lambda_fund_um * 0.5e-6)
         # Display range: 0 to 1.5 * k2
         self._k_max = 1.5 * self._k2
+        # Spectrum scale lock
+        self._spec_vmax_locked = None
+        self._spec_vmin = -20.0
+        self._spec_vmax = -8.0
 
     def _compute_spectrum(self):
         """Compute spatial FFT of E1 and E2 on GPU, return downsampled log magnitudes."""
@@ -197,13 +201,23 @@ class Renderer:
         s1 = fft1[:n_keep].get()
         s2 = fft2[:n_keep].get()
 
-        # Power spectrum (|FFT|²), log scale, shared normalization
+        # Power spectrum (|FFT|²), log10 scale
         floor = 1e-20
         s1 = np.log10(np.maximum(s1 ** 2, floor))
         s2 = np.log10(np.maximum(s2 ** 2, floor))
 
-        vmax = max(s1.max(), s2.max(), -10)
-        vmin = min(vmax - 12, -20)  # 12 decades of dynamic range
+        # Lock scale once established
+        vmax_now = max(s1.max(), s2.max(), -10)
+        if self._spec_vmax_locked is None:
+            if vmax_now > -5:  # pulse has meaningful power
+                self._spec_vmax_locked = vmax_now
+            vmax = vmax_now
+        else:
+            vmax = self._spec_vmax_locked
+
+        vmin = vmax - 12  # 12 decades = 120 dB dynamic range
+        self._spec_vmin = vmin
+        self._spec_vmax = vmax
         s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
         s2 = np.clip((s2 - vmin) / (vmax - vmin), 0, 1)
 
@@ -233,6 +247,9 @@ class Renderer:
 
     def invalidate_poling_cache(self):
         self._d_z_cache = None
+
+    def reset_spectrum_scale(self):
+        self._spec_vmax_locked = None
 
     def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
         """Extract visible zoom range and upload at up to 1:1 resolution."""
@@ -304,6 +321,9 @@ class Renderer:
         self.line_prog['line_color'] = (0.3, 0.3, 0.3)
         self._sep_vao.render(moderngl.LINES)
 
+        # ── 10 dB grid lines ──
+        self._draw_db_grid()
+
         # ── Spectrum lines ──
         s1, s2 = self._compute_spectrum()
         if s1 is not None:
@@ -324,6 +344,37 @@ class Renderer:
             # Reference lines for k₁ and k₂
             self._draw_ref_line(self._k1, (0.5, 0.2, 0.2))
             self._draw_ref_line(self._k2, (0.2, 0.2, 0.5))
+
+    def _draw_db_grid(self):
+        """Draw horizontal 1px lines at 10 dB intervals in the spectrum panel."""
+        vmin, vmax = self._spec_vmin, self._spec_vmax
+        if vmax <= vmin:
+            return
+        margin = 0.05 * (self.SPEC_TOP - self.SPEC_BOT)
+        y_lo = self.SPEC_BOT + margin
+        y_hi = self.SPEC_TOP - margin
+        span = vmax - vmin
+
+        # 10 dB = 1.0 in log10(power) units
+        # Find grid lines at integer multiples of 1.0 (= 10 dB)
+        db_step = 1.0  # 10 dB in log10 power
+        first = np.ceil(vmin / db_step) * db_step
+        verts = []
+        for level in np.arange(first, vmax, db_step):
+            frac = (level - vmin) / span
+            if frac < 0.01 or frac > 0.99:
+                continue
+            y_ndc = y_lo + frac * (y_hi - y_lo)
+            verts.extend([-1.0, y_ndc, 1.0, y_ndc])
+
+        if verts:
+            v = np.array(verts, dtype='f4')
+            vbo = self.ctx.buffer(v)
+            vao = self.ctx.vertex_array(self.line_prog, [(vbo, '2f', 'in_pos')])
+            self.line_prog['line_color'] = (0.2, 0.2, 0.2)
+            vao.render(moderngl.LINES)
+            vao.release()
+            vbo.release()
 
     def _draw_ref_line(self, k_val: float, color: tuple):
         """Draw a vertical dashed reference line at wavenumber k_val."""
