@@ -124,7 +124,8 @@ class FDTDSimulation:
         crystal_length_m: float = 500e-6,
         courant: float = 0.5,
         pulse_width_fs: float = 200.0,
-        boost: float = 50.0,
+        boost: float = 1.0,
+        peak_intensity_W_cm2: float = 1e9,
         poling_period_m: float | None = None,
     ):
         self.lambda_fund_um = lambda_fund_um
@@ -133,6 +134,7 @@ class FDTDSimulation:
         self.courant = courant
         self.pulse_width_s = pulse_width_fs * 1e-15
         self.boost = boost
+        self.peak_intensity_W_cm2 = peak_intensity_W_cm2
 
         self.n1 = sellmeier_n(lambda_fund_um, T_celsius)
         self.n2 = sellmeier_n(lambda_fund_um / 2.0, T_celsius)
@@ -179,7 +181,9 @@ class FDTDSimulation:
         self._mur_prev = cp.zeros(8, dtype=cp.float64)
         self._mur_coeff = (C * self.dt - self.dz) / (C * self.dt + self.dz)
 
-        self.E0 = 1.0
+        # Source amplitude from peak intensity: I = ½nε₀c E₀²
+        I_W_m2 = self.peak_intensity_W_cm2 * 1e4  # W/cm² → W/m²
+        self.E0 = np.sqrt(2.0 * I_W_m2 / (self.n1 * EPS0 * C))
         self.t0 = 4.0 * self.pulse_width_s
         self._src_eps = float(self.eps1[self.source_idx])
 
@@ -196,8 +200,8 @@ class FDTDSimulation:
         self._grid = (self.Nz + self._block - 1) // self._block
 
     def _compute_chi2(self):
-        FIELD_SCALE = 1.5e3
-        self._chi2_eff = 2.0 * D33 * self.boost * FIELD_SCALE ** 2
+        """χ⁽²⁾ = 2·d₃₃·boost. No artificial scaling — E₀ carries the real field amplitude."""
+        self._chi2_eff = 2.0 * D33 * self.boost
         self._eps0_chi2 = EPS0 * self._chi2_eff
 
     def _build_eps(self):

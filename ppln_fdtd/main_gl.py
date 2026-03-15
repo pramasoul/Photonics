@@ -51,7 +51,8 @@ DEFAULTS = dict(
     lambda_fund=1.064,
     crystal_length=500.0,
     temperature=25.0,
-    boost=50.0,
+    boost=1.0,
+    peak_intensity=1e9,       # W/cm²
     pulse_width=200.0,
     poling_period=None,
     steps_per_frame=500,
@@ -107,6 +108,8 @@ def build_parser():
                    help='Temperature (°C)')
     p.add_argument('--boost', type=float, default=None,
                    help='χ⁽²⁾ boost factor')
+    p.add_argument('--peak-intensity', type=float, default=None,
+                   help='Peak intensity (W/cm²)')
     p.add_argument('--pulse-width', type=float, default=None,
                    help='Pulse width (fs)')
     p.add_argument('--poling-period', type=float, default=None,
@@ -195,8 +198,9 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
         f"  t = {sim.current_time_ps:8.2f} ps     fps = {fps:5.1f}     steps/frame = {steps_per_frame}",
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm"
         f"     domains = {n_domains}",
-        f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
-        f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}"
+        f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs"
+        f"     I = {sim.peak_intensity_W_cm2:.0e} W/cm²",
+        f"  E₀ = {sim.E0:.2e} V/m    max|E₁| = {max_e1:.2e}   max|E₂| = {max_e2:.2e}"
         f"     R_pump={sim.R_pump[0]:.2f}  R_sh={sim.R_sh[0]:.2f}",
         f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}"
         f"{'   [NEAREST]' if renderer and renderer.nearest_mode else ''}",
@@ -259,6 +263,7 @@ def main():
         crystal_length_m=cfg['crystal_length'] * 1e-6,
         T_celsius=cfg['temperature'],
         boost=cfg['boost'],
+        peak_intensity_W_cm2=cfg['peak_intensity'],
         pulse_width_fs=cfg['pulse_width'],
         poling_period_m=poling_m,
     )
