@@ -87,18 +87,16 @@ void fdtd_step(
         double e1_tent = e1 + src1;
         double e2_tent = e2 + src2;
 
-        // Energy projection: enforce ε₁E₁² + ε₂E₂² = const per cell
-        // (total energy conservation: SHG transfers, doesn't create)
-        double eps1_local = mr_c1 * omega1;  // = ε₀n₁² (mr_c1 = ε₁/ω₁)
-        double eps2_local = mr_c2 * omega2;  // = ε₀n₂²
-        double u_before = eps1_local * e1 * e1 + eps2_local * e2 * e2;
-        double u_after  = eps1_local * e1_tent * e1_tent + eps2_local * e2_tent * e2_tent;
-        double du = u_after - u_before;
+        // Manley-Rowe projection: enforce ε₁E₁²/ω₁ + ε₂E₂²/ω₂ = const
+        // (photon number conservation; total energy correctly INCREASES)
+        double mr_before = mr_c1 * e1 * e1 + mr_c2 * e2 * e2;
+        double mr_after  = mr_c1 * e1_tent * e1_tent + mr_c2 * e2_tent * e2_tent;
+        double dmr = mr_after - mr_before;
 
-        // Correct E₁ to absorb the energy violation (clamped)
+        // Correct E₁ to absorb MR violation (clamped for stability)
         double e1sq = e1_tent * e1_tent;
         if (e1sq > 1e-30) {
-            double corr = 0.5 * du / (eps1_local * e1sq);
+            double corr = 0.5 * dmr / (mr_c1 * e1sq);
             if (corr > 0.05) corr = 0.05;
             if (corr < -0.05) corr = -0.05;
             e1_tent *= (1.0 - corr);
