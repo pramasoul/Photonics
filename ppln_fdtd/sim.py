@@ -22,7 +22,7 @@ void fdtd_step(
     double* __restrict__ E2, double* __restrict__ H2, double* __restrict__ D2,
     const double* __restrict__ eps1, const double* __restrict__ eps2,
     const double* __restrict__ d_z,
-    double* __restrict__ mur_prev,   // [E1_left, E1_right, E2_left, E2_right]
+    double* __restrict__ mur_prev,   // [E1[0], E1[1], E1[N-2], E1[N-1], E2[0], E2[1], E2[N-2], E2[N-1]]
     double ch, double cd,
     double eps0_chi2,
     double mur_coeff,
@@ -69,29 +69,39 @@ void fdtd_step(
     }
     __syncthreads();
 
-    // ── Mur ABC (boundary threads only) ──
+    // ── First-order Mur ABC ──
+    // E[boundary]^{n+1} = E[neighbor]^n + mc * (E[neighbor]^{n+1} - E[boundary]^n)
+    // mur_prev stores: [E1[0]^n, E1[1]^n, E1[N-2]^n, E1[N-1]^n,
+    //                   E2[0]^n, E2[1]^n, E2[N-2]^n, E2[N-1]^n]
     double mc = mur_coeff;
     if (i == 0) {
-        // Left boundary
-        double mp0 = mur_prev[0];
-        double mp2 = mur_prev[2];
-        E1[0] = E1[1] + mc * (E1[1] - mp0);
-        E2[0] = E2[1] + mc * (E2[1] - mp2);
+        double E1_0_old = mur_prev[0];
+        double E1_1_old = mur_prev[1];
+        double E2_0_old = mur_prev[4];
+        double E2_1_old = mur_prev[5];
+        E1[0] = E1_1_old + mc * (E1[1] - E1_0_old);
+        E2[0] = E2_1_old + mc * (E2[1] - E2_0_old);
         D1[0] = E1[0] * eps1[0];
         D2[0] = E2[0] * eps2[0];
-        mur_prev[0] = E1[1];
-        mur_prev[2] = E2[1];
+        // Save new boundary values for next step
+        mur_prev[0] = E1[0];
+        mur_prev[1] = E1[1];
+        mur_prev[4] = E2[0];
+        mur_prev[5] = E2[1];
     }
     if (i == Nz - 1) {
-        // Right boundary
-        double mp1 = mur_prev[1];
-        double mp3 = mur_prev[3];
-        E1[Nz-1] = E1[Nz-2] + mc * (E1[Nz-2] - mp1);
-        E2[Nz-1] = E2[Nz-2] + mc * (E2[Nz-2] - mp3);
+        double E1_Nm2_old = mur_prev[2];
+        double E1_Nm1_old = mur_prev[3];
+        double E2_Nm2_old = mur_prev[6];
+        double E2_Nm1_old = mur_prev[7];
+        E1[Nz-1] = E1_Nm2_old + mc * (E1[Nz-2] - E1_Nm1_old);
+        E2[Nz-1] = E2_Nm2_old + mc * (E2[Nz-2] - E2_Nm1_old);
         D1[Nz-1] = E1[Nz-1] * eps1[Nz-1];
         D2[Nz-1] = E2[Nz-1] * eps2[Nz-1];
-        mur_prev[1] = E1[Nz-2];
-        mur_prev[3] = E2[Nz-2];
+        mur_prev[2] = E1[Nz-2];
+        mur_prev[3] = E1[Nz-1];
+        mur_prev[6] = E2[Nz-2];
+        mur_prev[7] = E2[Nz-1];
     }
 }
 """
@@ -165,7 +175,7 @@ class FDTDSimulation:
         self.d_z = make_poling_pattern(self.z, self.Lambda, 1.0, self.crystal_mask)
 
         self.n_step = 0
-        self._mur_prev = cp.zeros(4, dtype=cp.float64)
+        self._mur_prev = cp.zeros(8, dtype=cp.float64)
         self._mur_coeff = (C * self.dt - self.dz) / (C * self.dt + self.dz)
 
         self.E0 = 1.0
@@ -222,7 +232,7 @@ class FDTDSimulation:
     def reset(self):
         self._alloc_fields()
         self.n_step = 0
-        self._mur_prev = cp.zeros(4, dtype=cp.float64)
+        self._mur_prev = cp.zeros(8, dtype=cp.float64)
         self.probe_E1.clear()
         self.probe_E2.clear()
         self.probe_times.clear()
