@@ -367,12 +367,12 @@ def main():
                 elif key == '-' or key == '_':
                     steps_per_frame = max(int(steps_per_frame / 1.5), spf_min)
                 elif key == 'l':
-                    new_L = sim.Lambda - 0.1e-6
+                    new_L = sim.Lambda - 10e-9
                     if new_L > 1e-6:
                         sim.rebuild_poling(new_L)
                         renderer.invalidate_poling_cache()
                 elif key == ';':
-                    sim.rebuild_poling(sim.Lambda + 0.1e-6)
+                    sim.rebuild_poling(sim.Lambda + 10e-9)
                     renderer.invalidate_poling_cache()
                 elif key == 't':
                     sim.update_temperature(max(20, sim.T - 5))

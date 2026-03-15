@@ -1,7 +1,7 @@
 lambda_fund: 1.064        # μm
 crystal_length: 500.0     # μm
 temperature: 25.0         # °C
-boost: 50.0
+boost: 1.0
 pulse_width: 200.0        # fs
 poling_period: null        # μm, null = auto QPM
 steps_per_frame: 500
