@@ -1,6 +1,6 @@
 # Carrier-Resolved FDTD for SHG in PPLN: Development, Learnings, and Limitations
 
-*Claude Code (Opus 4.6) and Claude Opus 4.6 Extended, with guidance from Tom Soulanille*
+*Claude Code (claude-opus-4-6, Anthropic), Claude Opus 4.6 Extended (Anthropic), and Tom Soulanille*
 *March 2026*
 
 ---
