@@ -15,16 +15,67 @@ The simulation resolves the optical carrier (not just the envelope), which means
 
 ```bash
 cd ppln_fdtd
-pixi run gl          # OpenGL real-time viewer (recommended)
-pixi run mpl         # matplotlib viewer (slower, more portable)
+pixi run gl          # GPU-rendered real-time viewer (recommended)
+pixi run run         # matplotlib viewer (slower, more portable)
 ```
 
-Key controls in the GL viewer:
-- **Λ slider**: poling period (drag to detune/retune QPM)
-- **T slider**: crystal temperature (shifts phase matching via Sellmeier)
-- **Intensity**: pump peak intensity in W/cm²
-- **ppw**: points per SH wavelength (resolution vs speed tradeoff)
-- Scroll to zoom, click-drag to pan
+### GL viewer controls
+
+All keyboard input via the terminal (press `h` for help):
+
+| Key | Action |
+|-----|--------|
+| `space` | pause / resume |
+| `r` | reset (re-inject pulse) |
+| `+` / `-` | simulation speed (steps/frame) |
+| `l` / `;` | poling period Λ ±10 nm |
+| `t` / `y` | temperature ±5°C |
+| `b` / `n` | χ⁽²⁾ boost (log scale) |
+| `p` / `o` | pulse width ±50 fs |
+| `1`/`2`, `3`/`4` | face reflectivity (pump, SH) |
+| `[` / `]` | spectrum ref level ±10 dB |
+| `{` / `}` | spectrum range ±1 decade |
+| `f` | toggle nearest/linear texture filtering |
+| `s` | save snapshot (.npz) |
+| `q` / `ESC` | quit |
+
+Mouse: scroll to zoom, click-drag to pan.
+
+### Scope viewer
+
+Press `s` in the GL viewer to save a snapshot, then view it with matplotlib:
+
+```bash
+pixi run scope                     # view latest snapshot
+pixi run scope snapshot.npz        # view specific file
+pixi run scope --watch             # auto-reload on each new snapshot
+```
+
+The scope shows E-field envelopes, poling pattern, spatial power spectrum with k-vector markers, and all simulation parameters.
+
+### Recording mode
+
+Save periodic snapshots for post-hoc analysis:
+
+```bash
+# Record every 10 fs from 2.0 to 3.5 ps
+pixi run python main_gl.py --record-start 2.0 --record-end 3.5 --record-interval 0.01
+
+# Or in default.yaml:
+record_start: 2.0
+record_end: 3.5
+record_interval: 0.01
+record_dir: recordings
+```
+
+### Configuration
+
+All parameters configurable via `default.yaml` (auto-loaded) or CLI switches:
+
+```bash
+pixi run python main_gl.py --ppw 100 --peak-intensity 1e9 --boost 1 --pulse-width 200
+pixi run python main_gl.py -c my_config.yaml --ppw 50   # YAML + CLI override
+```
 
 ## Requirements
 
