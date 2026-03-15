@@ -226,13 +226,30 @@ class FDTDSimulation:
         self._mr_c1 = EPS0 * self.n1 ** 2 / self.omega1
         self._mr_c2 = EPS0 * self.n2 ** 2 / self.omega2
 
+    @staticmethod
+    def _corrected_index(n_physical, omega, dz, dt, S):
+        """Compute n_eff that makes Yee numerical dispersion exact at omega.
+
+        The Yee grid with ε = ε₀·n_eff² will propagate the carrier at
+        exactly the physical phase velocity c/n_physical, eliminating the
+        numerical dispersion mismatch that causes parasitic QPM detuning.
+        """
+        k_true = n_physical * omega / C
+        n_eff = S * np.sin(k_true * dz / 2) / np.sin(omega * dt / 2)
+        return n_eff
+
     def _build_eps(self):
         Nz = self.Nz
         cs, ce = self.crystal_start, self.crystal_end
+
+        # Corrected indices for exact numerical phase velocity at carrier
+        n1_eff = self._corrected_index(self.n1, self.omega1, self.dz, self.dt, self.courant)
+        n2_eff = self._corrected_index(self.n2, self.omega2, self.dz, self.dt, self.courant)
+
         eps1 = np.full(Nz, EPS0, dtype=np.float64)
         eps2 = np.full(Nz, EPS0, dtype=np.float64)
-        eps1_xtal = EPS0 * self.n1 ** 2
-        eps2_xtal = EPS0 * self.n2 ** 2
+        eps1_xtal = EPS0 * n1_eff ** 2  # corrected for Yee propagation
+        eps2_xtal = EPS0 * n2_eff ** 2
         eps1[cs:ce] = eps1_xtal
         eps2[cs:ce] = eps2_xtal
         for eps_arr, eps_x, R_pair in [
