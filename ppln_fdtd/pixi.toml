@@ -7,6 +7,7 @@ version = "0.1.0"
 
 [tasks]
 run = "python main.py"
+gl = "python main_gl.py"
 
 [dependencies]
 python = ">=3.11"
@@ -17,3 +18,5 @@ cuda-nvrtc = ">=13.0"
 
 [pypi-dependencies]
 cupy-cuda13x = ">=14.0"
+glfw = ">=2.0"
+moderngl = ">=5.8"
