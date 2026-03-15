@@ -67,11 +67,17 @@ def load_config(args):
     """Merge YAML config (if any) with CLI overrides. CLI wins."""
     cfg = dict(DEFAULTS)
 
-    if args.config:
+    config_path = args.config
+    if config_path is None:
+        # Auto-load default.yaml from script directory if present
+        default_path = os.path.join(os.path.dirname(__file__), 'default.yaml')
+        if os.path.exists(default_path):
+            config_path = default_path
+
+    if config_path:
         import yaml
-        with open(args.config) as f:
+        with open(config_path) as f:
             file_cfg = yaml.safe_load(f) or {}
-        # Flatten nested dicts if present
         for k, v in file_cfg.items():
             if k in cfg:
                 cfg[k] = v
