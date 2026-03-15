@@ -192,8 +192,9 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
     max_e1 = float(E1.max()) if hasattr(E1, 'max') else 0
     max_e2 = float(E2.max()) if hasattr(E2, 'max') else 0
 
-    e_now, e_ref = energy_info
+    e_now, e_ref, mr_now, mr_ref = energy_info
     e_ratio = f"{e_now / e_ref:.10f}" if e_ref > 0 else "—"
+    mr_ratio = f"{mr_now / mr_ref:.10f}" if mr_ref > 0 else "—"
 
     n_domains = int(sim.crystal_length / (sim.Lambda / 2)) if sim.Lambda > 0 else 0
 
@@ -213,6 +214,7 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
         f"  E₀ = {sim.E0:.2e} V/m    max|E₁| = {max_e1:.2e}   max|E₂| = {max_e2:.2e}"
         f"     R_pump={sim.R_pump[0]:.2f}  R_sh={sim.R_sh[0]:.2f}",
         f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}"
+        f"     MR/MR₀ = {mr_ratio}"
         f"{'   [NEAREST]' if renderer and renderer.nearest_mode else ''}",
         spec_info,
         f"",
@@ -383,6 +385,8 @@ def main():
     fps = 0.0
     energy_ref = 0.0
     energy_now = 0.0
+    mr_ref = 0.0
+    mr_now = 0.0
     energy_ref_set = False
     crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
     v_vac = sim.courant
@@ -489,12 +493,14 @@ def main():
                 fps_time = now
 
                 energy_now = sim.get_energy()
+                mr_now = sim.get_manley_rowe()
                 if not energy_ref_set and sim.current_time_ps >= energy_ref_time_ps and energy_now > 0:
                     energy_ref = energy_now
+                    mr_ref = mr_now
                     energy_ref_set = True
 
                 print_status(sim, steps_per_frame, fps, paused, show_help,
-                             (energy_now, energy_ref), renderer)
+                             (energy_now, energy_ref, mr_now, mr_ref), renderer)
 
     finally:
         term.restore()

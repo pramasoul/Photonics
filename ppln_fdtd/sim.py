@@ -272,11 +272,21 @@ class FDTDSimulation:
         self.probe_times.clear()
 
     def get_energy(self):
+        """Total EM energy U = (Δz/2) Σ [ε E² + μ₀ H²] across both grids."""
         eps1_gpu = cp.asarray(self.eps1_host)
         eps2_gpu = cp.asarray(self.eps2_host)
         u_e = float(cp.sum(eps1_gpu * self.E1 ** 2 + eps2_gpu * self.E2 ** 2))
         u_h = float(MU0 * cp.sum(self.H1 ** 2 + self.H2 ** 2))
         return 0.5 * self.dz * (u_e + u_h)
+
+    def get_manley_rowe(self):
+        """Manley-Rowe invariant: Q = ∫n₁²E₁²dz/ω₁ + ∫n₂²E₂²dz/ω₂.
+
+        Conserved quantity for χ⁽²⁾ coupling (photon number conservation).
+        """
+        u1 = float(cp.sum(self.E1 ** 2)) * self.n1 ** 2 * self.dz
+        u2 = float(cp.sum(self.E2 ** 2)) * self.n2 ** 2 * self.dz
+        return u1 / self.omega1 + u2 / self.omega2
 
     def step(self, n_steps=1):
         kernel = _get_kernel()
