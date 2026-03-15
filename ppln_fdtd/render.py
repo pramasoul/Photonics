@@ -322,10 +322,20 @@ class Renderer:
         half = (self.zoom_hi - self.zoom_lo) / 2 * factor
         self.zoom_lo = max(0.0, center - half)
         self.zoom_hi = min(1.0, center + half)
-        # Snap to full view when nearly there
         if self.zoom_hi - self.zoom_lo > 0.99:
             self.zoom_lo = 0.0
             self.zoom_hi = 1.0
+
+    def pan(self, dx_frac: float):
+        """Pan the view by dx_frac of the current view width."""
+        span = self.zoom_hi - self.zoom_lo
+        dx = dx_frac * span
+        if self.zoom_lo + dx < 0:
+            dx = -self.zoom_lo
+        elif self.zoom_hi + dx > 1:
+            dx = 1.0 - self.zoom_hi
+        self.zoom_lo += dx
+        self.zoom_hi += dx
 
     def resize(self, width: int, height: int):
         self.width = width

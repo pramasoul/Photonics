@@ -154,12 +154,32 @@ def main():
     glfw.set_framebuffer_size_callback(window, on_resize)
 
     needs_redraw = [False]
+    dragging = [False]
+    drag_last_x = [0.0]
 
     def on_scroll(win, xoff, yoff):
         renderer.zoom(yoff)
         needs_redraw[0] = True
 
+    def on_mouse_button(win, button, action, mods):
+        if button == glfw.MOUSE_BUTTON_LEFT:
+            if action == glfw.PRESS:
+                dragging[0] = True
+                x, _ = glfw.get_cursor_pos(win)
+                drag_last_x[0] = x
+            else:
+                dragging[0] = False
+
+    def on_cursor_pos(win, x, y):
+        if dragging[0] and renderer.zoom_hi - renderer.zoom_lo < 0.99:
+            dx_pixels = x - drag_last_x[0]
+            drag_last_x[0] = x
+            renderer.pan(-dx_pixels / width)
+            needs_redraw[0] = True
+
     glfw.set_scroll_callback(window, on_scroll)
+    glfw.set_mouse_button_callback(window, on_mouse_button)
+    glfw.set_cursor_pos_callback(window, on_cursor_pos)
 
     # ── Terminal ──
     term = Terminal()
