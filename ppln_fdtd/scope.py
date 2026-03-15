@@ -138,19 +138,24 @@ def main():
     if args.watch:
         last_mtime = os.path.getmtime(args.file)
         plt.ion()
-        plt.show()
+        plt.show(block=False)
         print("Watching for snapshot updates... (Ctrl+C to stop)")
         try:
             while True:
-                plt.pause(0.5)
+                # Poll without raising window — avoid plt.pause() which grabs focus
+                fig.canvas.flush_events()
+                time.sleep(0.3)
+                if not plt.fignum_exists(fig.number):
+                    break
                 mtime = os.path.getmtime(args.file)
                 if mtime != last_mtime:
                     last_mtime = mtime
-                    time.sleep(0.1)  # let write complete
+                    time.sleep(0.1)
                     try:
                         snap = load_snapshot(args.file)
                         plot_snapshot(snap, fig)
                         fig.canvas.draw_idle()
+                        fig.canvas.flush_events()
                     except Exception as e:
                         print(f"  reload error: {e}")
         except KeyboardInterrupt:
