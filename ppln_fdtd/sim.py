@@ -31,8 +31,6 @@ void fdtd_step(
     double ch,
     double nl_coeff2,       // chi2 / n2^2  (SHG)
     double nl_coeff1,       // chi2 / (2*n1^2)  (back-conv, MR-matched)
-    double mr_c1,           // eps1 / omega1
-    double mr_c2,           // eps2 / omega2
     double mur_coeff,
     double src_val,
     int src_idx,
@@ -85,18 +83,6 @@ void fdtd_step(
         double e1_tent = e1 + src1;
         double e2_tent = e2 + src2;
 
-        // MR projection: enforce ε₁E₁²/ω₁ + ε₂E₂²/ω₂ = const per cell
-        double mr_before = mr_c1 * e1 * e1 + mr_c2 * e2 * e2;
-        double mr_after  = mr_c1 * e1_tent * e1_tent + mr_c2 * e2_tent * e2_tent;
-        double dmr = mr_after - mr_before;
-
-        double e1sq = e1_tent * e1_tent;
-        if (e1sq > 1e-30) {
-            double corr = 0.5 * dmr / (mr_c1 * e1sq);
-            if (corr > 0.05) corr = 0.05;
-            if (corr < -0.05) corr = -0.05;
-            e1_tent *= (1.0 - corr);
-        }
 
         E1[i] = e1_tent;
         E2[i] = e2_tent;
@@ -347,8 +333,6 @@ class FDTDSimulation:
         ch = self.ch
         nl2 = self._nl_coeff2
         nl1 = self._nl_coeff1
-        mrc1 = self._mr_c1
-        mrc2 = self._mr_c2
         mc = self._mur_coeff
         si = np.int32(self.source_idx)
         cs = np.int32(self.crystal_start)
@@ -372,7 +356,7 @@ class FDTDSimulation:
             kernel(grid, block,
                    (E1, H1, E2, H2, E1p, E2p,
                     inv_eps1, inv_eps2, d_z, mp,
-                    ch, nl2, nl1, mrc1, mrc2, mc, src,
+                    ch, nl2, nl1, mc, src,
                     si, cs, ce, nz))
 
             self.n_step += 1
