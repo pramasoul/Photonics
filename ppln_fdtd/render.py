@@ -104,7 +104,8 @@ class Renderer:
     FIELD_TOP = -0.62
     FIELD_BOT = -1.0
 
-    def __init__(self, ctx: moderngl.Context, width: int, height: int, sim):
+    def __init__(self, ctx: moderngl.Context, width: int, height: int, sim,
+                 spec_ref: float = 4.0, spec_decades: float = 8.0):
         self.ctx = ctx
         self.width = width
         self.height = height
@@ -176,54 +177,22 @@ class Renderer:
         self._k2 = sim.n2 / (sim.lambda_fund_um * 0.5e-6)
         # Display range: 0 to 1.5 * k2
         self._k_max = 1.5 * self._k2
-        # Spectrum scale — calibrate by running sim to find peak
-        self._spec_vmax_locked = None
-        self._spec_vmin = -20.0
-        self._spec_vmax = -8.0
-        self._calibrate_spectrum_scale(sim)
+        # Spectrum scale (adjustable at runtime)
+        self.spec_ref = spec_ref      # top of display in log10(power)
+        self.spec_decades = spec_decades
+        self._spec_vmax = self.spec_ref
+        self._spec_vmin = self.spec_ref - self.spec_decades
 
-    def _calibrate_spectrum_scale(self, sim):
-        """Run sim forward to find peak spectrum power, then reset."""
-        import copy
-        # Save state
-        saved_n = sim.n_step
-        saved_E1 = sim.E1.copy()
-        saved_H1 = sim.H1.copy()
-        saved_D1 = sim.D1.copy()
-        saved_E2 = sim.E2.copy()
-        saved_H2 = sim.H2.copy()
-        saved_D2 = sim.D2.copy()
-        saved_mur = sim._mur_prev.copy()
+    def adjust_spec_ref(self, delta: float):
+        """Shift spectrum reference level by delta decades."""
+        self.spec_ref += delta
+        self._spec_vmax = self.spec_ref
+        self._spec_vmin = self.spec_ref - self.spec_decades
 
-        # Run until pulse is well into crystal (peak power)
-        crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
-        v_vac = sim.courant
-        v_xtal = sim.courant / sim.n1
-        steps_to_mid = int((sim.crystal_start - sim.source_idx) / v_vac
-                          + (crystal_mid - sim.crystal_start) / v_xtal
-                          + sim.t0 / sim.dt)
-        sim.step(steps_to_mid)
-
-        # Measure peak
-        fft1 = cp.abs(cp.fft.rfft(sim.E1))
-        fft2 = cp.abs(cp.fft.rfft(sim.E2))
-        peak = max(float(fft1.max()), float(fft2.max()), 1e-20)
-        peak_db = np.log10(peak ** 2)
-
-        # Set scale: 1 decade headroom above peak, 8 decades total
-        self._spec_vmax_locked = peak_db + 1
-        self._spec_vmax = self._spec_vmax_locked
-        self._spec_vmin = self._spec_vmax - 8
-
-        # Restore state
-        sim.E1[:] = saved_E1
-        sim.H1[:] = saved_H1
-        sim.D1[:] = saved_D1
-        sim.E2[:] = saved_E2
-        sim.H2[:] = saved_H2
-        sim.D2[:] = saved_D2
-        sim._mur_prev[:] = saved_mur
-        sim.n_step = saved_n
+    def adjust_spec_decades(self, delta: float):
+        """Adjust spectrum range by delta decades (min 2)."""
+        self.spec_decades = max(2.0, self.spec_decades + delta)
+        self._spec_vmin = self.spec_ref - self.spec_decades
 
     def _compute_spectrum(self):
         """Compute spatial FFT of E1 and E2 on GPU, return downsampled log magnitudes."""
@@ -283,7 +252,7 @@ class Renderer:
         self._d_z_cache = None
 
     def reset_spectrum_scale(self):
-        self._calibrate_spectrum_scale(self.sim)
+        pass  # scale is user-controlled now
 
     def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
         """Extract visible zoom range and upload at up to 1:1 resolution."""

@@ -1,11 +1,13 @@
 """PPLN 1D FDTD Explorer — GPU-rendered display, terminal controls.
 
 GL window is pure visual display. All text and keyboard input via terminal.
+Parameters settable via YAML config file and/or command-line switches.
 """
 
 import sys
 import os
 import time
+import argparse
 import tty
 import termios
 import select
@@ -29,6 +31,8 @@ HELP = """\
   p / o     pulse width  −/+ 50 fs
   1 / 2     R_pump (ω face reflectivity)  −/+
   3 / 4     R_sh (2ω face reflectivity)  −/+
+  [ / ]     spectrum ref level  −/+ 10 dB
+  { / }     spectrum range  −/+ 1 decade
   f         toggle interpolation (linear / nearest)
   h         toggle this help
   q / ESC   quit
@@ -40,11 +44,85 @@ HELP = """\
 """
 
 
-class Terminal:
-    """Raw-mode terminal for non-blocking single-char reads.
+# ── Defaults ──────────────────────────────────────────────────────────
 
-    Falls back gracefully when stdin is not a tty (e.g. backgrounded).
-    """
+DEFAULTS = dict(
+    lambda_fund=1.064,
+    crystal_length=500.0,
+    temperature=25.0,
+    boost=50.0,
+    pulse_width=200.0,
+    poling_period=None,
+    steps_per_frame=500,
+    R_pump=0.0,
+    R_sh=0.0,
+    spec_ref=4.0,
+    spec_decades=8.0,
+    width=1600,
+    height=800,
+)
+
+
+def load_config(args):
+    """Merge YAML config (if any) with CLI overrides. CLI wins."""
+    cfg = dict(DEFAULTS)
+
+    if args.config:
+        import yaml
+        with open(args.config) as f:
+            file_cfg = yaml.safe_load(f) or {}
+        # Flatten nested dicts if present
+        for k, v in file_cfg.items():
+            if k in cfg:
+                cfg[k] = v
+
+    # CLI overrides (only if explicitly set)
+    for key in DEFAULTS:
+        cli_val = getattr(args, key, None)
+        if cli_val is not None:
+            cfg[key] = cli_val
+
+    return cfg
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="PPLN 1D FDTD SHG Explorer (GPU-rendered)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument('-c', '--config', type=str, default=None,
+                   help='YAML config file path')
+    p.add_argument('--lambda-fund', type=float, default=None,
+                   help='Fundamental wavelength (μm)')
+    p.add_argument('--crystal-length', type=float, default=None,
+                   help='Crystal length (μm)')
+    p.add_argument('--temperature', type=float, default=None,
+                   help='Temperature (°C)')
+    p.add_argument('--boost', type=float, default=None,
+                   help='χ⁽²⁾ boost factor')
+    p.add_argument('--pulse-width', type=float, default=None,
+                   help='Pulse width (fs)')
+    p.add_argument('--poling-period', type=float, default=None,
+                   help='Poling period (μm), default=QPM')
+    p.add_argument('--steps-per-frame', type=int, default=None,
+                   help='Simulation steps per display frame')
+    p.add_argument('--R-pump', type=float, default=None,
+                   help='Pump face reflectivity (0=AR, 1=bare)')
+    p.add_argument('--R-sh', type=float, default=None,
+                   help='SH face reflectivity (0=AR, 1=bare)')
+    p.add_argument('--spec-ref', type=float, default=None,
+                   help='Spectrum reference level (log10 power, top of display)')
+    p.add_argument('--spec-decades', type=float, default=None,
+                   help='Spectrum display range (decades)')
+    p.add_argument('--width', type=int, default=None,
+                   help='Window width (pixels)')
+    p.add_argument('--height', type=int, default=None,
+                   help='Window height (pixels)')
+    return p
+
+
+class Terminal:
+    """Raw-mode terminal for non-blocking single-char reads."""
 
     def __init__(self):
         self.active = os.isatty(sys.stdin.fileno())
@@ -62,7 +140,6 @@ class Terminal:
         if select.select([sys.stdin], [], [], 0)[0]:
             ch = sys.stdin.read(1)
             if ch == '\x1b':
-                # Read any buffered continuation bytes (escape sequence)
                 seq = ''
                 while select.select([sys.stdin], [], [], 0.05)[0]:
                     seq += sys.stdin.read(1)
@@ -71,7 +148,6 @@ class Terminal:
                 if seq.startswith('['):
                     code = seq[1:2]
                     return {'A': 'UP', 'B': 'DOWN', 'C': 'RIGHT', 'D': 'LEFT'}.get(code)
-                # Bare escape (no sequence followed)
                 return 'ESC'
             return ch
         return None
@@ -87,8 +163,7 @@ class Terminal:
 
 
 def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, renderer=None):
-    """Print status block to terminal, overwriting previous output."""
-    sys.stdout.write('\x1b[H')  # cursor home
+    sys.stdout.write('\x1b[H')
 
     L_coh = coherence_length(sim.lambda_fund_um, sim.T)
     Lambda_qpm = 2 * L_coh
@@ -101,8 +176,11 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
     e_now, e_ref = energy_info
     e_ratio = f"{e_now / e_ref:.10f}" if e_ref > 0 else "—"
 
-    # Domain count: crystal length / (Lambda/2) = number of half-periods
     n_domains = int(sim.crystal_length / (sim.Lambda / 2)) if sim.Lambda > 0 else 0
+
+    spec_info = ""
+    if renderer:
+        spec_info = f"  spec: ref={renderer.spec_ref:.0f} range={renderer.spec_decades:.0f} decades"
 
     lines = [
         f"  PPLN 1D FDTD Explorer          {'[PAUSED]' if paused else ''}",
@@ -115,23 +193,38 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
         f"     R_pump={sim.R_pump[0]:.2f}  R_sh={sim.R_sh[0]:.2f}",
         f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}"
         f"{'   [NEAREST]' if renderer and renderer.nearest_mode else ''}",
+        spec_info,
         f"",
     ]
 
     if show_help:
         lines.extend(HELP.split('\n'))
 
-    # Pad and write with ANSI clear-to-end-of-line
     for line in lines:
         sys.stdout.write(f"{line}\x1b[K\n")
-
-    # Clear any leftover lines from previous (longer) output
     sys.stdout.write('\x1b[J')
     sys.stdout.flush()
 
 
 def main():
-    sim = FDTDSimulation()
+    parser = build_parser()
+    args = parser.parse_args()
+    cfg = load_config(args)
+
+    # Build sim
+    poling_m = cfg['poling_period'] * 1e-6 if cfg['poling_period'] else None
+    sim = FDTDSimulation(
+        lambda_fund_um=cfg['lambda_fund'],
+        crystal_length_m=cfg['crystal_length'] * 1e-6,
+        T_celsius=cfg['temperature'],
+        boost=cfg['boost'],
+        pulse_width_fs=cfg['pulse_width'],
+        poling_period_m=poling_m,
+    )
+    if cfg['R_pump'] > 0:
+        sim.set_R_pump(left=cfg['R_pump'], right=cfg['R_pump'])
+    if cfg['R_sh'] > 0:
+        sim.set_R_sh(left=cfg['R_sh'], right=cfg['R_sh'])
 
     # ── Window ──
     if not glfw.init():
@@ -142,7 +235,7 @@ def main():
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
     glfw.window_hint(glfw.OPENGL_FORWARD_COMPAT, True)
 
-    width, height = 1600, 800
+    width, height = cfg['width'], cfg['height']
     window = glfw.create_window(width, height, "PPLN FDTD", None, None)
     if not window:
         glfw.terminate()
@@ -152,7 +245,9 @@ def main():
     glfw.swap_interval(1)
 
     ctx = moderngl.create_context()
-    renderer = Renderer(ctx, width, height, sim)
+    renderer = Renderer(ctx, width, height, sim,
+                        spec_ref=cfg['spec_ref'],
+                        spec_decades=cfg['spec_decades'])
 
     def on_resize(win, w, h):
         nonlocal width, height
@@ -197,11 +292,11 @@ def main():
     # ── State ──
     paused = False
     show_help = False
-    steps_per_frame = 500
+    steps_per_frame = cfg['steps_per_frame']
     spf_min, spf_max = 10, 100000
-    pending_keys = []  # GLFW key events (always active)
+    pending_keys = []
 
-    # ── GLFW key input (always active, works from both windows) ──
+    # ── GLFW key input (always active) ──
     GLFW_KEY_MAP = {
         glfw.KEY_SPACE: ' ', glfw.KEY_R: 'r', glfw.KEY_H: 'h',
         glfw.KEY_Q: 'q', glfw.KEY_ESCAPE: 'q',
@@ -209,27 +304,32 @@ def main():
         glfw.KEY_T: 't', glfw.KEY_Y: 'y',
         glfw.KEY_B: 'b', glfw.KEY_N: 'n',
         glfw.KEY_P: 'p', glfw.KEY_O: 'o', glfw.KEY_F: 'f',
-        glfw.KEY_1: '1', glfw.KEY_2: '2', glfw.KEY_3: '3', glfw.KEY_4: '4',
         glfw.KEY_EQUAL: '+', glfw.KEY_MINUS: '-',
         glfw.KEY_KP_ADD: '+', glfw.KEY_KP_SUBTRACT: '-',
+        glfw.KEY_1: '1', glfw.KEY_2: '2', glfw.KEY_3: '3', glfw.KEY_4: '4',
+        glfw.KEY_LEFT_BRACKET: '[', glfw.KEY_RIGHT_BRACKET: ']',
     }
 
     def on_key(win, key, scancode, action, mods):
-        if action in (glfw.PRESS, glfw.REPEAT) and key in GLFW_KEY_MAP:
-            pending_keys.append(GLFW_KEY_MAP[key])
+        if action in (glfw.PRESS, glfw.REPEAT):
+            if key in GLFW_KEY_MAP:
+                ch = GLFW_KEY_MAP[key]
+                # Shift+[ = {, Shift+] = }
+                if mods & glfw.MOD_SHIFT:
+                    ch = {'[': '{', ']': '}'}.get(ch, ch)
+                pending_keys.append(ch)
 
     glfw.set_key_callback(window, on_key)
 
     frame_count = 0
     fps_time = time.perf_counter()
     fps = 0.0
-    energy_ref = 0.0  # set when pulse reaches crystal center
+    energy_ref = 0.0
     energy_now = 0.0
     energy_ref_set = False
-    # Time for pulse center to reach crystal midpoint
     crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
-    v_vac = sim.courant  # cells/step in vacuum
-    v_xtal = sim.courant / sim.n1  # cells/step in crystal
+    v_vac = sim.courant
+    v_xtal = sim.courant / sim.n1
     steps_to_mid = ((sim.crystal_start - sim.source_idx) / v_vac
                     + (crystal_mid - sim.crystal_start) / v_xtal)
     energy_ref_time_ps = (sim.t0 + steps_to_mid * sim.dt) * 1e12
@@ -238,7 +338,7 @@ def main():
         while not glfw.window_should_close(window):
             glfw.poll_events()
 
-            # ── Input (terminal or GLFW fallback) ──
+            # ── Input ──
             key = term.read_key()
             if key is None and pending_keys:
                 key = pending_keys.pop(0)
@@ -294,6 +394,18 @@ def main():
                 elif key == '4':
                     r = min(1.0, sim.R_sh[0] + 0.05)
                     sim.set_R_sh(left=r, right=r)
+                elif key == '[':
+                    renderer.adjust_spec_ref(-1.0)
+                    needs_redraw[0] = True
+                elif key == ']':
+                    renderer.adjust_spec_ref(1.0)
+                    needs_redraw[0] = True
+                elif key == '{':
+                    renderer.adjust_spec_decades(-1.0)
+                    needs_redraw[0] = True
+                elif key == '}':
+                    renderer.adjust_spec_decades(1.0)
+                    needs_redraw[0] = True
 
             # ── Simulate ──
             if not paused:
@@ -302,7 +414,6 @@ def main():
                 renderer.render(E1, E2)
                 glfw.swap_buffers(window)
             else:
-                # When paused, only redraw on input/scroll; sleep to yield CPU/GPU
                 if key or needs_redraw[0]:
                     E1, E2 = sim.get_fields()
                     renderer.render(E1, E2)
@@ -318,7 +429,6 @@ def main():
                 frame_count = 0
                 fps_time = now
 
-                # Energy check (GPU reduction, ~1x per status update)
                 energy_now = sim.get_energy()
                 if not energy_ref_set and sim.current_time_ps >= energy_ref_time_ps and energy_now > 0:
                     energy_ref = energy_now
@@ -330,7 +440,7 @@ def main():
     finally:
         term.restore()
         glfw.terminate()
-        print()  # clean line after restore
+        print()
 
 
 if __name__ == "__main__":
