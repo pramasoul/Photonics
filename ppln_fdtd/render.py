@@ -206,16 +206,16 @@ class Renderer:
         s1 = np.log10(np.maximum(s1 ** 2, floor))
         s2 = np.log10(np.maximum(s2 ** 2, floor))
 
-        # Lock scale once established
+        # Lock scale once established, with 2 decades headroom above peak
         vmax_now = max(s1.max(), s2.max(), -10)
         if self._spec_vmax_locked is None:
             if vmax_now > -5:  # pulse has meaningful power
-                self._spec_vmax_locked = vmax_now
-            vmax = vmax_now
+                self._spec_vmax_locked = vmax_now + 2  # 20 dB headroom
+            vmax = vmax_now + 2
         else:
             vmax = self._spec_vmax_locked
 
-        vmin = vmax - 30  # 30 decades = 300 dB dynamic range
+        vmin = vmax - 8  # 8 decades = 80 dB dynamic range
         self._spec_vmin = vmin
         self._spec_vmax = vmax
         s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
