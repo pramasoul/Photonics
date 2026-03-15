@@ -1,7 +1,11 @@
 """1D FDTD simulation of SHG in PPLN — two coupled Yee grids on GPU.
 
-Uses the D-field constitutive approach for energy-conserving nonlinear coupling.
-The entire FDTD step (H, D, E, P_NL, source, Mur ABC) is a single CUDA kernel.
+Uses ΔP_NL source-term coupling: the time derivative of the nonlinear
+polarization drives SH generation. This correctly accumulates the SH
+field coherently over the crystal length, unlike the constitutive
+D-field approach which gives only a static perturbation.
+
+The entire FDTD step is a single CUDA kernel.
 """
 
 import cupy as cp
@@ -14,24 +18,33 @@ MU0 = 4e-7 * np.pi
 EPS0 = 8.854e-12
 
 # ── Fully fused CUDA kernel ───────────────────────────────────────────
-# One launch does the entire FDTD step including boundaries.
 _KERNEL_SRC = r"""
 extern "C" __global__
 void fdtd_step(
-    double* __restrict__ E1, double* __restrict__ H1, double* __restrict__ D1,
-    double* __restrict__ E2, double* __restrict__ H2, double* __restrict__ D2,
-    const double* __restrict__ eps1, const double* __restrict__ eps2,
+    double* __restrict__ E1, double* __restrict__ H1,
+    double* __restrict__ E2, double* __restrict__ H2,
+    const double* __restrict__ inv_eps1,   // 1/(eps0*n1^2) per cell
+    const double* __restrict__ inv_eps2,   // 1/(eps0*n2^2) per cell
     const double* __restrict__ d_z,
-    double* __restrict__ mur_prev,   // [E1[0], E1[1], E1[N-2], E1[N-1], E2[0], E2[1], E2[N-2], E2[N-1]]
-    double ch, double cd,
-    double eps0_chi2,
+    const double* __restrict__ inv_eps_nl1,  // 1/(eps0*n1^2) per cell (for NL source)
+    const double* __restrict__ inv_eps_nl2,  // 1/(eps0*n2^2) per cell
+    double* __restrict__ mur_prev,
+    double ch,
+    double chi2,                           // 2*d33*boost (no eps0)
     double mur_coeff,
-    double src_val,         // precomputed source value * eps for this step
+    double src_val,
     int src_idx,
-    int cs, int ce,         // crystal region
+    int cs, int ce,
     int Nz)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Save old E values for ΔP_NL computation
+    double e1_old = 0.0, e2_old = 0.0;
+    if (i < Nz) {
+        e1_old = E1[i];
+        e2_old = E2[i];
+    }
 
     // ── H update ──
     if (i < Nz - 1) {
@@ -40,39 +53,35 @@ void fdtd_step(
     }
     __syncthreads();
 
-    // ── D update ──
+    // ── E update (standard Yee) ──
     if (i >= 1 && i < Nz) {
-        D1[i] += cd * (H1[i] - H1[i - 1]);
-        D2[i] += cd * (H2[i] - H2[i - 1]);
+        E1[i] += inv_eps1[i] * (H1[i] - H1[i - 1]);
+        E2[i] += inv_eps2[i] * (H2[i] - H2[i - 1]);
     }
     __syncthreads();
 
-    // ── Source injection (single thread) ──
+    // ── Source injection ──
     if (i == src_idx) {
-        D1[i] += src_val;
+        E1[i] += src_val;
     }
     __syncthreads();
 
-    // ── E = (D - P_NL) / eps ──
-    if (i < Nz) {
-        double e1p = E1[i];
-        double e2p = E2[i];
-        double e1n = D1[i] / eps1[i];
-        double e2n = D2[i] / eps2[i];
-        if (i >= cs && i < ce) {
-            double d = d_z[i];
-            e2n -= eps0_chi2 * d * e1p * e1p / eps2[i];
-            e1n -= eps0_chi2 * d * 2.0 * e2p * e1p / eps1[i];
-        }
-        E1[i] = e1n;
-        E2[i] = e2n;
+    // ── Nonlinear coupling: ΔE = -ΔP_NL / (eps0*n^2) ──
+    // ΔP_NL2 = eps0 * chi2 * d(z) * (E1_new^2 - E1_old^2)   → SHG
+    // ΔP_NL1 = eps0 * chi2 * d(z) * 2*(E2_old*E1_new - E2_old*E1_old)  → back-conv
+    if (i >= cs && i < ce) {
+        double d = d_z[i];
+        double e1_new = E1[i];
+        double dE1sq = e1_new * e1_new - e1_old * e1_old;
+        double dE2E1 = e2_old * (e1_new - e1_old);
+
+        // -ΔP_NL / (eps0*n^2) = -chi2 * d * Δ(...) * inv_eps_nl
+        E2[i] -= chi2 * d * dE1sq * inv_eps_nl2[i];
+        E1[i] -= chi2 * d * 2.0 * dE2E1 * inv_eps_nl1[i];
     }
     __syncthreads();
 
-    // ── First-order Mur ABC ──
-    // E[boundary]^{n+1} = E[neighbor]^n + mc * (E[neighbor]^{n+1} - E[boundary]^n)
-    // mur_prev stores: [E1[0]^n, E1[1]^n, E1[N-2]^n, E1[N-1]^n,
-    //                   E2[0]^n, E2[1]^n, E2[N-2]^n, E2[N-1]^n]
+    // ── Mur ABC ──
     double mc = mur_coeff;
     if (i == 0) {
         double E1_0_old = mur_prev[0];
@@ -81,9 +90,6 @@ void fdtd_step(
         double E2_1_old = mur_prev[5];
         E1[0] = E1_1_old + mc * (E1[1] - E1_0_old);
         E2[0] = E2_1_old + mc * (E2[1] - E2_0_old);
-        D1[0] = E1[0] * eps1[0];
-        D2[0] = E2[0] * eps2[0];
-        // Save new boundary values for next step
         mur_prev[0] = E1[0];
         mur_prev[1] = E1[1];
         mur_prev[4] = E2[0];
@@ -96,8 +102,6 @@ void fdtd_step(
         double E2_Nm1_old = mur_prev[7];
         E1[Nz-1] = E1_Nm2_old + mc * (E1[Nz-2] - E1_Nm1_old);
         E2[Nz-1] = E2_Nm2_old + mc * (E2[Nz-2] - E2_Nm1_old);
-        D1[Nz-1] = E1[Nz-1] * eps1[Nz-1];
-        D2[Nz-1] = E2[Nz-1] * eps2[Nz-1];
         mur_prev[2] = E1[Nz-2];
         mur_prev[3] = E1[Nz-1];
         mur_prev[6] = E2[Nz-2];
@@ -162,17 +166,15 @@ class FDTDSimulation:
             poling_period_m = qpm_period(lambda_fund_um, T_celsius)
         self.Lambda = poling_period_m
 
+        # Update coefficients
         self.ch = self.dt / (MU0 * self.dz)
-        self.cd = self.dt / self.dz
 
-        # Face reflectivities (amplitude R, 0=AR, up to ~0.36 for bare Fresnel)
-        # Per-grid, per-face: [left, right]
-        self.R_pump = [0.0, 0.0]    # fundamental (ω) — AR coated by default
-        self.R_sh = [0.0, 0.0]      # second harmonic (2ω) — AR coated by default
-        self.taper_cells = 200       # taper length for AR coating
+        # Face reflectivities
+        self.R_pump = [0.0, 0.0]
+        self.R_sh = [0.0, 0.0]
+        self.taper_cells = 200
 
         self._build_eps()
-
         self._compute_chi2()
         self._alloc_fields()
         self.d_z = make_poling_pattern(self.z, self.Lambda, 1.0, self.crystal_mask)
@@ -182,12 +184,11 @@ class FDTDSimulation:
         self._mur_coeff = (C * self.dt - self.dz) / (C * self.dt + self.dz)
 
         # Source amplitude from peak intensity: I = ½nε₀c E₀²
-        I_W_m2 = self.peak_intensity_W_cm2 * 1e4  # W/cm² → W/m²
+        I_W_m2 = self.peak_intensity_W_cm2 * 1e4
         self.E0 = np.sqrt(2.0 * I_W_m2 / (self.n1 * EPS0 * C))
         self.t0 = 4.0 * self.pulse_width_s
-        self._src_eps = float(self.eps1[self.source_idx])
 
-        # Temporal probe (opt-in, used by matplotlib version)
+        # Temporal probe (opt-in)
         self.probe_enabled = False
         self.probe_idx = self.crystal_end + 10
         self.probe_E1 = []
@@ -200,51 +201,54 @@ class FDTDSimulation:
         self._grid = (self.Nz + self._block - 1) // self._block
 
     def _compute_chi2(self):
-        """χ⁽²⁾ = 2·d₃₃·boost. No artificial scaling — E₀ carries the real field amplitude."""
-        self._chi2_eff = 2.0 * D33 * self.boost
-        self._eps0_chi2 = EPS0 * self._chi2_eff
+        """χ⁽²⁾ = 2·d₃₃·boost. Pure physics, no artificial scaling."""
+        self._chi2 = 2.0 * D33 * self.boost
 
     def _build_eps(self):
-        """Build permittivity arrays with cosine tapers at crystal faces.
-
-        R=0: full cosine taper over taper_cells (broadband AR).
-        R>0: shorter taper → more Fresnel reflection, up to R=1 (sharp + mirror).
-        Each grid (pump/SH) and each face (left/right) is independent.
-        """
+        """Build permittivity and inverse-permittivity arrays with AR tapers."""
         Nz = self.Nz
         cs, ce = self.crystal_start, self.crystal_end
 
-        self.eps1 = cp.full(Nz, EPS0, dtype=cp.float64)
-        self.eps2 = cp.full(Nz, EPS0, dtype=cp.float64)
+        # Base permittivity
+        eps1 = np.full(Nz, EPS0, dtype=np.float64)
+        eps2 = np.full(Nz, EPS0, dtype=np.float64)
 
-        # Crystal interior: full ε
         eps1_xtal = EPS0 * self.n1 ** 2
         eps2_xtal = EPS0 * self.n2 ** 2
-        self.eps1[cs:ce] = eps1_xtal
-        self.eps2[cs:ce] = eps2_xtal
+        eps1[cs:ce] = eps1_xtal
+        eps2[cs:ce] = eps2_xtal
 
-        # Apply cosine tapers at each face, scaled by (1-R)
-        # R=0 → full taper (AR), R=1 → no taper (maximum reflection)
-        for eps_arr, eps_xtal, R_pair in [
-            (self.eps1, eps1_xtal, self.R_pump),
-            (self.eps2, eps2_xtal, self.R_sh),
+        # AR tapers
+        for eps_arr, eps_x, R_pair in [
+            (eps1, eps1_xtal, self.R_pump),
+            (eps2, eps2_xtal, self.R_sh),
         ]:
             for face, R in enumerate(R_pair):
-                # Effective taper length: shrinks with R
                 t_len = max(1, int(self.taper_cells * (1.0 - min(R, 1.0))))
-                # Cosine taper from EPS0 to eps_xtal
                 t = np.linspace(0, np.pi / 2, t_len)
-                profile = EPS0 + (eps_xtal - EPS0) * np.sin(t) ** 2
-                profile_gpu = cp.asarray(profile)
-                if face == 0:  # left face
+                profile = EPS0 + (eps_x - EPS0) * np.sin(t) ** 2
+                if face == 0:
                     n = min(t_len, ce - cs)
-                    eps_arr[cs:cs + n] = profile_gpu[:n]
-                else:  # right face
+                    eps_arr[cs:cs + n] = profile[:n]
+                else:
                     n = min(t_len, ce - cs)
-                    eps_arr[ce - n:ce] = profile_gpu[:n][::-1]
+                    eps_arr[ce - n:ce] = profile[:n][::-1]
+
+        # Store as GPU arrays
+        self.eps1_host = eps1
+        self.eps2_host = eps2
+
+        # inv_eps = dt / (eps * dz) — the Yee E-update coefficient per cell
+        self.inv_eps1 = cp.asarray(self.dt / (eps1 * self.dz))
+        self.inv_eps2 = cp.asarray(self.dt / (eps2 * self.dz))
+        # inv_n_sq = 1/n² per cell — for NL source: ΔE = -χ⁽²⁾d·ΔE₁²/n²
+        # (the ε₀ in P_NL = ε₀χ⁽²⁾E² cancels with ε₀ in ε = ε₀n²)
+        n_sq1 = eps1 / EPS0
+        n_sq2 = eps2 / EPS0
+        self.inv_eps_nl1 = cp.asarray(1.0 / n_sq1)
+        self.inv_eps_nl2 = cp.asarray(1.0 / n_sq2)
 
     def set_R_pump(self, left: float | None = None, right: float | None = None):
-        """Set pump face reflectivities and rebuild ε."""
         if left is not None:
             self.R_pump[0] = max(0.0, min(1.0, left))
         if right is not None:
@@ -252,7 +256,6 @@ class FDTDSimulation:
         self._build_eps()
 
     def set_R_sh(self, left: float | None = None, right: float | None = None):
-        """Set SH face reflectivities and rebuild ε."""
         if left is not None:
             self.R_sh[0] = max(0.0, min(1.0, left))
         if right is not None:
@@ -262,10 +265,8 @@ class FDTDSimulation:
     def _alloc_fields(self):
         self.E1 = cp.zeros(self.Nz, dtype=cp.float64)
         self.H1 = cp.zeros(self.Nz, dtype=cp.float64)
-        self.D1 = cp.zeros(self.Nz, dtype=cp.float64)
         self.E2 = cp.zeros(self.Nz, dtype=cp.float64)
         self.H2 = cp.zeros(self.Nz, dtype=cp.float64)
-        self.D2 = cp.zeros(self.Nz, dtype=cp.float64)
 
     def rebuild_poling(self, Lambda: float):
         self.Lambda = Lambda
@@ -296,22 +297,27 @@ class FDTDSimulation:
         self.probe_E2.clear()
         self.probe_times.clear()
 
-    def step(self, n_steps: int = 1):
-        """Run n_steps FDTD updates.
+    def get_energy(self) -> float:
+        """Total EM energy: U = (dz/2) * Σ [ε E² + μ₀ H²], computed on GPU."""
+        # Use per-cell eps from host arrays
+        eps1_gpu = cp.asarray(self.eps1_host)
+        eps2_gpu = cp.asarray(self.eps2_host)
+        u_e = float(cp.sum(eps1_gpu * self.E1 ** 2 + eps2_gpu * self.E2 ** 2))
+        u_h = float(MU0 * cp.sum(self.H1 ** 2 + self.H2 ** 2))
+        return 0.5 * self.dz * (u_e + u_h)
 
-        Each step is a single CUDA kernel launch.  The only host work per step
-        is computing the source value (two transcendentals) and the Python
-        loop counter.  Probe recording syncs every _probe_every steps.
-        """
+    def step(self, n_steps: int = 1):
+        """Run n_steps FDTD updates. Single kernel launch per step."""
         kernel = _get_kernel()
         grid, block = (self._grid,), (self._block,)
-        E1, H1, D1 = self.E1, self.H1, self.D1
-        E2, H2, D2 = self.E2, self.H2, self.D2
-        eps1, eps2 = self.eps1, self.eps2
+        E1, H1 = self.E1, self.H1
+        E2, H2 = self.E2, self.H2
+        inv_eps1, inv_eps2 = self.inv_eps1, self.inv_eps2
+        inv_eps_nl1, inv_eps_nl2 = self.inv_eps_nl1, self.inv_eps_nl2
         d_z = self.d_z
         mp = self._mur_prev
-        ch, cd = self.ch, self.cd
-        eps0_chi2 = self._eps0_chi2
+        ch = self.ch
+        chi2 = self._chi2
         mc = self._mur_coeff
         si = np.int32(self.source_idx)
         cs = np.int32(self.crystal_start)
@@ -323,7 +329,6 @@ class FDTDSimulation:
         omega1 = self.omega1
         E0 = self.E0
         t0 = self.t0
-        src_eps = self._src_eps
         inv_2sig2 = -1.0 / (2.0 * self.pulse_width_s ** 2)
 
         probe_vals = []
@@ -331,15 +336,14 @@ class FDTDSimulation:
         for _ in range(n_steps):
             t = self.n_step * dt
 
-            # Source value (host math — two transcendentals, ~ns)
             t_src = t - t0
-            src_d = E0 * np.exp(t_src * t_src * inv_2sig2) * np.sin(omega1 * t) * src_eps
+            src = E0 * np.exp(t_src * t_src * inv_2sig2) * np.sin(omega1 * t)
 
-            # Single kernel launch does everything
             kernel(grid, block,
-                   (E1, H1, D1, E2, H2, D2,
-                    eps1, eps2, d_z, mp,
-                    ch, cd, eps0_chi2, mc, src_d,
+                   (E1, H1, E2, H2,
+                    inv_eps1, inv_eps2, d_z,
+                    inv_eps_nl1, inv_eps_nl2,
+                    mp, ch, chi2, mc, src,
                     si, cs, ce, nz))
 
             self.n_step += 1
@@ -352,12 +356,6 @@ class FDTDSimulation:
                 self.probe_E1.append(v1)
                 self.probe_E2.append(v2)
                 self.probe_times.append(tp)
-
-    def get_energy(self) -> float:
-        """Total EM energy: U = (dz/2) * Σ [ε E² + μ₀ H²], computed on GPU."""
-        u_e = float(cp.sum(self.eps1 * self.E1 ** 2 + self.eps2 * self.E2 ** 2))
-        u_h = float(MU0 * cp.sum(self.H1 ** 2 + self.H2 ** 2))
-        return 0.5 * self.dz * (u_e + u_h)
 
     def get_fields(self):
         return self.E1.get(), self.E2.get()

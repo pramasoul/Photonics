@@ -8,7 +8,7 @@ poling_period: null        # μm, null = auto QPM
 steps_per_frame: 500
 R_pump: 0.0               # 0 = AR coated
 R_sh: 0.0
-spec_ref: 7.0             # log10(power), top of spectrum display
-spec_decades: 14.0
+spec_ref: 23.0             # log10(power), top of spectrum display
+spec_decades: 16.0
 width: 1600
 height: 800
