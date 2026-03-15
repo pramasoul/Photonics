@@ -22,7 +22,7 @@ HELP = """\
   ─────────────────────────────────
   space     pause / resume
   r         reset (re-inject pulse)
-  ↑ / ↓     simulation speed (steps/frame)
+  + / -     simulation speed (steps/frame)
   l / ;     poling period Λ  −/+
   t / y     temperature  −/+ 5°C
   b / n     χ⁽²⁾ boost  −/+ (log)
@@ -199,9 +199,9 @@ def main():
                     show_help = not show_help
                 elif key == 'r':
                     sim.reset()
-                elif key == 'UP':
+                elif key == '+' or key == '=':
                     steps_per_frame = min(int(steps_per_frame * 1.5), spf_max)
-                elif key == 'DOWN':
+                elif key == '-' or key == '_':
                     steps_per_frame = max(int(steps_per_frame / 1.5), spf_min)
                 elif key == 'l':
                     new_L = sim.Lambda - 0.1e-6
