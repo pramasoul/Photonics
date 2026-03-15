@@ -153,6 +153,14 @@ def main():
 
     glfw.set_framebuffer_size_callback(window, on_resize)
 
+    needs_redraw = [False]
+
+    def on_scroll(win, xoff, yoff):
+        renderer.zoom(yoff)
+        needs_redraw[0] = True
+
+    glfw.set_scroll_callback(window, on_scroll)
+
     # ── Terminal ──
     term = Terminal()
     term.clear_and_home()
@@ -246,11 +254,12 @@ def main():
                 renderer.render(E1, E2)
                 glfw.swap_buffers(window)
             else:
-                # When paused, only redraw on input; sleep to yield CPU/GPU
-                if key:
+                # When paused, only redraw on input/scroll; sleep to yield CPU/GPU
+                if key or needs_redraw[0]:
                     E1, E2 = sim.get_fields()
                     renderer.render(E1, E2)
                     glfw.swap_buffers(window)
+                    needs_redraw[0] = False
                 time.sleep(0.05)
 
             # ── Terminal status ──

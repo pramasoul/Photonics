@@ -31,16 +31,20 @@ FIELD_FRAG = """
 uniform sampler2D field_tex;
 uniform float crystal_lo;
 uniform float crystal_hi;
+uniform float zoom_lo;   // left edge of view in [0,1] UV space
+uniform float zoom_hi;   // right edge of view in [0,1] UV space
 in vec2 uv;
 out vec4 fragColor;
 
 void main() {
-    vec4 f = texture(field_tex, vec2(uv.x, 0.5));
+    // Map screen uv.x [0,1] to zoomed texture coordinate
+    float tx = zoom_lo + uv.x * (zoom_hi - zoom_lo);
+    vec4 f = texture(field_tex, vec2(tx, 0.5));
     float e1 = f.r;
     float e2 = f.b;
     float poling = f.a;
 
-    bool in_crystal = uv.x >= crystal_lo && uv.x <= crystal_hi;
+    bool in_crystal = tx >= crystal_lo && tx <= crystal_hi;
     vec3 bg = in_crystal ? vec3(0.08) : vec3(0.03);
 
     // Poling strip (bottom 8%)
@@ -110,6 +114,10 @@ class Renderer:
         self.height = height
         self.sim = sim
 
+        # Zoom state: [0,1] range in UV space
+        self.zoom_lo = 0.0
+        self.zoom_hi = 1.0
+
         Nz = sim.Nz
         self.crystal_lo = sim.crystal_start / Nz
         self.crystal_hi = sim.crystal_end / Nz
@@ -124,6 +132,8 @@ class Renderer:
         # ── Field shader + quad ──
         self.field_prog = ctx.program(vertex_shader=VERT_SHADER, fragment_shader=FIELD_FRAG)
         self.field_prog['field_tex'] = 0
+        self.field_prog['zoom_lo'] = 0.0
+        self.field_prog['zoom_hi'] = 1.0
         self.field_prog['crystal_lo'] = self.crystal_lo
         self.field_prog['crystal_hi'] = self.crystal_hi
 
@@ -256,7 +266,9 @@ class Renderer:
         """Render one frame: spectrum panel + field panel."""
         self.ctx.clear(0.05, 0.05, 0.05)
 
-        # ── Field panel ──
+        # ── Field panel (with zoom) ──
+        self.field_prog['zoom_lo'] = self.zoom_lo
+        self.field_prog['zoom_hi'] = self.zoom_hi
         self.update_field_texture(E1, E2)
         self.field_tex.use(0)
         self.field_vao.render()
@@ -302,6 +314,18 @@ class Renderer:
         vao.render(moderngl.LINES)
         vao.release()
         vbo.release()
+
+    def zoom(self, scroll_y: float):
+        """Zoom in/out centered on the current view midpoint."""
+        factor = 0.85 if scroll_y > 0 else 1.0 / 0.85
+        center = (self.zoom_lo + self.zoom_hi) / 2
+        half = (self.zoom_hi - self.zoom_lo) / 2 * factor
+        self.zoom_lo = max(0.0, center - half)
+        self.zoom_hi = min(1.0, center + half)
+        # Snap to full view when nearly there
+        if self.zoom_hi - self.zoom_lo > 0.99:
+            self.zoom_lo = 0.0
+            self.zoom_hi = 1.0
 
     def resize(self, width: int, height: int):
         self.width = width
