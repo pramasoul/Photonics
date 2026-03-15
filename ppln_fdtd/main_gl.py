@@ -59,11 +59,16 @@ class Terminal:
         if select.select([sys.stdin], [], [], 0)[0]:
             ch = sys.stdin.read(1)
             if ch == '\x1b':
-                if select.select([sys.stdin], [], [], 0.01)[0]:
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == '[' and select.select([sys.stdin], [], [], 0.01)[0]:
-                        ch3 = sys.stdin.read(1)
-                        return {'A': 'UP', 'B': 'DOWN', 'C': 'RIGHT', 'D': 'LEFT'}.get(ch3, '')
+                # Read any buffered continuation bytes (escape sequence)
+                seq = ''
+                while select.select([sys.stdin], [], [], 0.05)[0]:
+                    seq += sys.stdin.read(1)
+                    if len(seq) > 4:
+                        break
+                if seq.startswith('['):
+                    code = seq[1:2]
+                    return {'A': 'UP', 'B': 'DOWN', 'C': 'RIGHT', 'D': 'LEFT'}.get(code)
+                # Bare escape (no sequence followed)
                 return 'ESC'
             return ch
         return None
