@@ -163,12 +163,13 @@ class FDTDSimulation:
         self.ch = self.dt / (MU0 * self.dz)
         self.cd = self.dt / self.dz
 
-        self.eps1 = cp.full(self.Nz, EPS0 * self.n1 ** 2, dtype=cp.float64)
-        self.eps2 = cp.full(self.Nz, EPS0 * self.n2 ** 2, dtype=cp.float64)
-        self.eps1[:self.crystal_start] = EPS0
-        self.eps1[self.crystal_end:] = EPS0
-        self.eps2[:self.crystal_start] = EPS0
-        self.eps2[self.crystal_end:] = EPS0
+        # Face reflectivities (amplitude R, 0=AR, up to ~0.36 for bare Fresnel)
+        # Per-grid, per-face: [left, right]
+        self.R_pump = [0.0, 0.0]    # fundamental (ω) — AR coated by default
+        self.R_sh = [0.0, 0.0]      # second harmonic (2ω) — AR coated by default
+        self.taper_cells = 200       # taper length for AR coating
+
+        self._build_eps()
 
         self._compute_chi2()
         self._alloc_fields()
@@ -199,6 +200,61 @@ class FDTDSimulation:
         self._chi2_eff = 2.0 * D33 * self.boost * FIELD_SCALE ** 2
         self._eps0_chi2 = EPS0 * self._chi2_eff
 
+    def _build_eps(self):
+        """Build permittivity arrays with cosine tapers at crystal faces.
+
+        R=0: full cosine taper over taper_cells (broadband AR).
+        R>0: shorter taper → more Fresnel reflection, up to R=1 (sharp + mirror).
+        Each grid (pump/SH) and each face (left/right) is independent.
+        """
+        Nz = self.Nz
+        cs, ce = self.crystal_start, self.crystal_end
+
+        self.eps1 = cp.full(Nz, EPS0, dtype=cp.float64)
+        self.eps2 = cp.full(Nz, EPS0, dtype=cp.float64)
+
+        # Crystal interior: full ε
+        eps1_xtal = EPS0 * self.n1 ** 2
+        eps2_xtal = EPS0 * self.n2 ** 2
+        self.eps1[cs:ce] = eps1_xtal
+        self.eps2[cs:ce] = eps2_xtal
+
+        # Apply cosine tapers at each face, scaled by (1-R)
+        # R=0 → full taper (AR), R=1 → no taper (maximum reflection)
+        for eps_arr, eps_xtal, R_pair in [
+            (self.eps1, eps1_xtal, self.R_pump),
+            (self.eps2, eps2_xtal, self.R_sh),
+        ]:
+            for face, R in enumerate(R_pair):
+                # Effective taper length: shrinks with R
+                t_len = max(1, int(self.taper_cells * (1.0 - min(R, 1.0))))
+                # Cosine taper from EPS0 to eps_xtal
+                t = np.linspace(0, np.pi / 2, t_len)
+                profile = EPS0 + (eps_xtal - EPS0) * np.sin(t) ** 2
+                profile_gpu = cp.asarray(profile)
+                if face == 0:  # left face
+                    n = min(t_len, ce - cs)
+                    eps_arr[cs:cs + n] = profile_gpu[:n]
+                else:  # right face
+                    n = min(t_len, ce - cs)
+                    eps_arr[ce - n:ce] = profile_gpu[:n][::-1]
+
+    def set_R_pump(self, left: float | None = None, right: float | None = None):
+        """Set pump face reflectivities and rebuild ε."""
+        if left is not None:
+            self.R_pump[0] = max(0.0, min(1.0, left))
+        if right is not None:
+            self.R_pump[1] = max(0.0, min(1.0, right))
+        self._build_eps()
+
+    def set_R_sh(self, left: float | None = None, right: float | None = None):
+        """Set SH face reflectivities and rebuild ε."""
+        if left is not None:
+            self.R_sh[0] = max(0.0, min(1.0, left))
+        if right is not None:
+            self.R_sh[1] = max(0.0, min(1.0, right))
+        self._build_eps()
+
     def _alloc_fields(self):
         self.E1 = cp.zeros(self.Nz, dtype=cp.float64)
         self.H1 = cp.zeros(self.Nz, dtype=cp.float64)
@@ -221,8 +277,7 @@ class FDTDSimulation:
         self.n2 = sellmeier_n(self.lambda_fund_um / 2.0, T_celsius)
         self.omega1 = 2 * np.pi * C / (self.lambda_fund_um * 1e-6)
         self.omega2 = 2 * self.omega1
-        self.eps1[self.crystal_start:self.crystal_end] = EPS0 * self.n1 ** 2
-        self.eps2[self.crystal_start:self.crystal_end] = EPS0 * self.n2 ** 2
+        self._build_eps()
         self._compute_chi2()
 
     def update_pulse_width(self, pw_fs: float):

@@ -27,6 +27,8 @@ HELP = """\
   t / y     temperature  −/+ 5°C
   b / n     χ⁽²⁾ boost  −/+ (log)
   p / o     pulse width  −/+ 50 fs
+  1 / 2     R_pump (ω face reflectivity)  −/+
+  3 / 4     R_sh (2ω face reflectivity)  −/+
   f         toggle interpolation (linear / nearest)
   h         toggle this help
   q / ESC   quit
@@ -105,7 +107,8 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
         f"  t = {sim.current_time_ps:8.2f} ps     fps = {fps:5.1f}     steps/frame = {steps_per_frame}",
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
-        f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}",
+        f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}"
+        f"     R_pump={sim.R_pump[0]:.2f}  R_sh={sim.R_sh[0]:.2f}",
         f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}"
         f"{'   [NEAREST]' if renderer and renderer.nearest_mode else ''}",
         f"",
@@ -202,6 +205,7 @@ def main():
         glfw.KEY_T: 't', glfw.KEY_Y: 'y',
         glfw.KEY_B: 'b', glfw.KEY_N: 'n',
         glfw.KEY_P: 'p', glfw.KEY_O: 'o', glfw.KEY_F: 'f',
+        glfw.KEY_1: '1', glfw.KEY_2: '2', glfw.KEY_3: '3', glfw.KEY_4: '4',
         glfw.KEY_EQUAL: '+', glfw.KEY_MINUS: '-',
         glfw.KEY_KP_ADD: '+', glfw.KEY_KP_SUBTRACT: '-',
     }
@@ -273,6 +277,18 @@ def main():
                 elif key == 'o':
                     pw = sim.pulse_width_s * 1e15
                     sim.update_pulse_width(min(2000, pw + 50))
+                elif key == '1':
+                    r = max(0.0, sim.R_pump[0] - 0.05)
+                    sim.set_R_pump(left=r, right=r)
+                elif key == '2':
+                    r = min(1.0, sim.R_pump[0] + 0.05)
+                    sim.set_R_pump(left=r, right=r)
+                elif key == '3':
+                    r = max(0.0, sim.R_sh[0] - 0.05)
+                    sim.set_R_sh(left=r, right=r)
+                elif key == '4':
+                    r = min(1.0, sim.R_sh[0] + 0.05)
+                    sim.set_R_sh(left=r, right=r)
 
             # ── Simulate ──
             if not paused:
