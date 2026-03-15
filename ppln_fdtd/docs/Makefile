@@ -22,8 +22,9 @@ FIGURES_SCRIPT = paper_figures.py
 
 # Pandoc settings
 ENGINE = xelatex
-FONT = Libertinus Serif
-MONO = Inconsolata
+#FONT = "Libertinus Serif"
+FONT = "Linux Libertine O"
+MONO = "Inconsolata"
 FONTSIZE = 11pt
 MARGIN = 1in
 HIGHLIGHT = tango
