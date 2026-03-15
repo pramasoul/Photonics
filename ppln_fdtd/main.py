@@ -12,6 +12,7 @@ from materials import qpm_period, coherence_length
 
 def main():
     sim = FDTDSimulation()
+    sim.probe_enabled = True
 
     print(f"Grid: {sim.Nz} cells, dz = {sim.dz*1e9:.2f} nm, dt = {sim.dt*1e18:.2f} as")
     print(f"n(ω) = {sim.n1:.4f}, n(2ω) = {sim.n2:.4f}")

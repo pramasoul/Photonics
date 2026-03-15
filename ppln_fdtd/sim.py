@@ -172,6 +172,8 @@ class FDTDSimulation:
         self.t0 = 4.0 * self.pulse_width_s
         self._src_eps = float(self.eps1[self.source_idx])
 
+        # Temporal probe (opt-in, used by matplotlib version)
+        self.probe_enabled = False
         self.probe_idx = self.crystal_end + 10
         self.probe_E1 = []
         self.probe_E2 = []
@@ -273,13 +275,14 @@ class FDTDSimulation:
 
             self.n_step += 1
 
-            if self.n_step % pe == 0:
+            if self.probe_enabled and self.n_step % pe == 0:
                 probe_vals.append((float(E1[pi]), float(E2[pi]), self.n_step * dt))
 
-        for v1, v2, tp in probe_vals:
-            self.probe_E1.append(v1)
-            self.probe_E2.append(v2)
-            self.probe_times.append(tp)
+        if probe_vals:
+            for v1, v2, tp in probe_vals:
+                self.probe_E1.append(v1)
+                self.probe_E2.append(v2)
+                self.probe_times.append(tp)
 
     def get_fields(self):
         return self.E1.get(), self.E2.get()
