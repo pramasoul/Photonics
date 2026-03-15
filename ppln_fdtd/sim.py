@@ -284,6 +284,12 @@ class FDTDSimulation:
                 self.probe_E2.append(v2)
                 self.probe_times.append(tp)
 
+    def get_energy(self) -> float:
+        """Total EM energy: U = (dz/2) * Σ [ε E² + μ₀ H²], computed on GPU."""
+        u_e = float(cp.sum(self.eps1 * self.E1 ** 2 + self.eps2 * self.E2 ** 2))
+        u_h = float(MU0 * cp.sum(self.H1 ** 2 + self.H2 ** 2))
+        return 0.5 * self.dz * (u_e + u_h)
+
     def get_fields(self):
         return self.E1.get(), self.E2.get()
 

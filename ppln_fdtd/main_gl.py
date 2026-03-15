@@ -83,7 +83,7 @@ class Terminal:
             sys.stdout.flush()
 
 
-def print_status(sim, steps_per_frame, fps, paused, show_help):
+def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info):
     """Print status block to terminal, overwriting previous output."""
     sys.stdout.write('\x1b[H')  # cursor home
 
@@ -95,6 +95,8 @@ def print_status(sim, steps_per_frame, fps, paused, show_help):
     max_e1 = float(E1.max()) if hasattr(E1, 'max') else 0
     max_e2 = float(E2.max()) if hasattr(E2, 'max') else 0
 
+    e_now, e_ref, e_drift = energy_info
+
     lines = [
         f"  PPLN 1D FDTD Explorer          {'[PAUSED]' if paused else ''}",
         f"  ────────────────────────────────────────────",
@@ -102,6 +104,7 @@ def print_status(sim, steps_per_frame, fps, paused, show_help):
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
         f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}",
+        f"  energy = {e_now:.6e}   drift = {e_drift:+.2e}%  (Verlet/leapfrog)",
         f"",
     ]
 
@@ -181,6 +184,10 @@ def main():
     frame_count = 0
     fps_time = time.perf_counter()
     fps = 0.0
+    energy_ref = 0.0  # set after source has fired
+    energy_now = 0.0
+    energy_drift = 0.0
+    energy_ref_set = False
 
     try:
         while not glfw.window_should_close(window):
@@ -199,6 +206,7 @@ def main():
                     show_help = not show_help
                 elif key == 'r':
                     sim.reset()
+                    energy_ref_set = False
                 elif key == '+' or key == '=':
                     steps_per_frame = min(int(steps_per_frame * 1.5), spf_max)
                 elif key == '-' or key == '_':
@@ -240,7 +248,20 @@ def main():
                 fps = frame_count / (now - fps_time)
                 frame_count = 0
                 fps_time = now
-                print_status(sim, steps_per_frame, fps, paused, show_help)
+
+                # Energy check (GPU reduction, ~1x per status update)
+                energy_now = sim.get_energy()
+                # Set reference after source pulse has mostly fired (t > 5*t0)
+                if not energy_ref_set and sim.current_time_ps > sim.t0 * 1e12 * 1.2 and energy_now > 0:
+                    energy_ref = energy_now
+                    energy_ref_set = True
+                if energy_ref > 0:
+                    energy_drift = (energy_now - energy_ref) / energy_ref * 100
+                else:
+                    energy_drift = 0.0
+
+                print_status(sim, steps_per_frame, fps, paused, show_help,
+                             (energy_now, energy_ref, energy_drift))
 
     finally:
         term.restore()
