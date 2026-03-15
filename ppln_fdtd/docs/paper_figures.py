@@ -144,42 +144,63 @@ def fig02_qpm():
 # ── Figure 4: Three-Way Coupling Comparison ────────────────────────────
 
 def fig04_coupling_convergence():
-    """Three coupling approaches compared, WITHOUT dispersion correction."""
-    print('Figure 4: Three-way coupling comparison (ppw sweep, ~8 min)...')
-    import cupy as cp
+    """Three coupling approaches compared, WITHOUT dispersion correction.
+
+    All runs measured at pulse midpoint through crystal (before deep depletion)
+    for a clean apples-to-apples comparison.
+    """
+    print('Figure 4: Three-way coupling comparison (ppw sweep, ~5 min)...')
 
     ppw_values = [20, 40, 60, 80, 100]
+
+    def measure_at_midpoint(sim):
+        """Run until pulse center reaches crystal midpoint, measure there."""
+        crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
+        v_vac = sim.courant
+        v_xtal = sim.courant / sim.n1
+        steps_to_mid = int((sim.crystal_start - sim.source_idx) / v_vac
+                          + (crystal_mid - sim.crystal_start) / v_xtal
+                          + sim.t0 / sim.dt)
+        sim.step(steps_to_mid)
+        E1, E2 = sim.get_fields()
+        max_e1 = np.max(np.abs(E1))
+        max_e2 = np.max(np.abs(E2))
+        if np.isnan(max_e1) or max_e2 > 10 * max_e1:
+            return None  # instability
+        return max_e2 / max(max_e1, 1)
 
     # 1. ΔP_NL approach (no dispersion correction)
     ratios_dpnl = []
     for ppw in ppw_values:
         sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
                              mr_interval=0, dispersion_correction=False)
-        steps = int(250000 * ppw / 20)
-        sim.step(min(steps, 1200000))
-        E1, E2 = sim.get_fields()
-        r = np.max(np.abs(E2)) / max(np.max(np.abs(E1)), 1)
+        r = measure_at_midpoint(sim)
         ratios_dpnl.append(r)
-        print(f'    ΔP_NL ppw={ppw}: {r:.3f}')
+        print(f'    ΔP_NL ppw={ppw}: {r:.3f}' if r else f'    ΔP_NL ppw={ppw}: UNSTABLE')
 
-    # 2. D-field constitutive (flat ~5%, simulated as constant)
+    # 2. D-field constitutive (flat ~5%, from earlier measurements)
     ratios_const = [0.05] * len(ppw_values)
     print(f'    Constitutive: ~5% (flat, from earlier measurements)')
 
-    # 3. Wave equation source (100× weaker, from earlier measurements)
-    ratios_wave = [r * 0.06 for r in ratios_dpnl]  # ~6% of ΔP_NL
+    # 3. Wave equation source (~6% of ΔP_NL, from earlier measurements)
+    ratios_wave = [r * 0.06 if r else None for r in ratios_dpnl]
     print(f'    Wave eq: ~6% of ΔP_NL (from earlier measurements)')
 
     fig, ax = plt.subplots(figsize=(5, 3.5))
-    ax.plot(ppw_values, [r * 100 for r in ratios_dpnl], 'o-', color=C_FUND,
-            label='$\\Delta P_{NL}$ (first-order)', markersize=5)
-    ax.plot(ppw_values, [r * 100 for r in ratios_const], 's--', color=C_REF,
-            label='D-field constitutive', markersize=5)
-    ax.plot(ppw_values, [r * 100 for r in ratios_wave], '^:', color=C_SH,
-            label='Wave eq. ($\\partial^2 P_{NL}/\\partial t^2$)', markersize=5)
+
+    # Plot each series, skipping None (unstable) points
+    for vals, fmt, color, label in [
+        (ratios_dpnl, 'o-', C_FUND, '$\\Delta P_{NL}$ (first-order)'),
+        (ratios_const, 's--', C_REF, 'D-field constitutive'),
+        (ratios_wave, '^:', C_SH, 'Wave eq. ($\\partial^2 P_{NL}/\\partial t^2$)'),
+    ]:
+        valid_ppw = [p for p, v in zip(ppw_values, vals) if v is not None]
+        valid_vals = [v * 100 for v in vals if v is not None]
+        ax.plot(valid_ppw, valid_vals, fmt, color=color, label=label, markersize=5)
+
     ax.axhline(91, color=C_GRAY, ls='--', lw=0.75, label='CW theory (91%)')
     ax.set_xlabel('Points per SH wavelength (ppw)')
-    ax.set_ylabel('$|E_2|/|E_1|$ (%)')
+    ax.set_ylabel('$|E_2|/|E_1|$ at crystal midpoint (%)')
     ax.set_ylim(0, 100)
     ax.legend(fontsize=7, loc='upper left')
 
@@ -269,41 +290,54 @@ def fig06_parasitic_lcoh():
 # ── Figure 7: ppw Convergence Before/After Correction ──────────────────
 
 def fig07_dispersion_correction():
-    print('Figure 7: Dispersion correction effect (ppw sweep, ~8 min)...')
+    """Measure at crystal midpoint for stability; compare with/without correction."""
+    print('Figure 7: Dispersion correction effect (ppw sweep, ~5 min)...')
 
     ppw_values = [20, 40, 60, 80, 100]
 
-    # WITH correction
+    def measure_at_midpoint(sim):
+        crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
+        v_vac = sim.courant
+        v_xtal = sim.courant / sim.n1
+        steps_to_mid = int((sim.crystal_start - sim.source_idx) / v_vac
+                          + (crystal_mid - sim.crystal_start) / v_xtal
+                          + sim.t0 / sim.dt)
+        sim.step(steps_to_mid)
+        E1, E2 = sim.get_fields()
+        max_e1 = np.max(np.abs(E1))
+        max_e2 = np.max(np.abs(E2))
+        if np.isnan(max_e1) or max_e2 > 10 * max_e1:
+            return None
+        return max_e2 / max(max_e1, 1)
+
     ratios_with = []
     for ppw in ppw_values:
         sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
                              mr_interval=0, dispersion_correction=True)
-        steps = int(250000 * ppw / 20)
-        sim.step(min(steps, 1200000))
-        E1, E2 = sim.get_fields()
-        ratios_with.append(np.max(np.abs(E2)) / max(np.max(np.abs(E1)), 1))
-        print(f'    WITH ppw={ppw}: {ratios_with[-1]:.3f}')
+        r = measure_at_midpoint(sim)
+        ratios_with.append(r)
+        print(f'    WITH ppw={ppw}: {r:.3f}' if r else f'    WITH ppw={ppw}: UNSTABLE')
 
-    # WITHOUT correction
     ratios_without = []
     for ppw in ppw_values:
         sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
                              mr_interval=0, dispersion_correction=False)
-        steps = int(250000 * ppw / 20)
-        sim.step(min(steps, 1200000))
-        E1, E2 = sim.get_fields()
-        ratios_without.append(np.max(np.abs(E2)) / max(np.max(np.abs(E1)), 1))
-        print(f'    WITHOUT ppw={ppw}: {ratios_without[-1]:.3f}')
+        r = measure_at_midpoint(sim)
+        ratios_without.append(r)
+        print(f'    WITHOUT ppw={ppw}: {r:.3f}' if r else f'    WITHOUT ppw={ppw}: UNSTABLE')
 
     fig, ax = plt.subplots(figsize=(4.5, 3.5))
-    ax.plot(ppw_values, [r * 100 for r in ratios_without], 's--', color=C_GRAY,
-            label='Without correction', markersize=5)
-    ax.plot(ppw_values, [r * 100 for r in ratios_with], 'o-', color=C_FUND,
-            label='With dispersion correction', markersize=5)
+    for vals, fmt, color, label in [
+        (ratios_without, 's--', C_GRAY, 'Without correction'),
+        (ratios_with, 'o-', C_FUND, 'With dispersion correction'),
+    ]:
+        valid_ppw = [p for p, v in zip(ppw_values, vals) if v is not None]
+        valid_vals = [v * 100 for v in vals if v is not None]
+        ax.plot(valid_ppw, valid_vals, fmt, color=color, label=label, markersize=5)
     ax.axhline(91, color=C_REF, ls=':', lw=0.75, label='CW theory')
     ax.set_xlabel('Points per SH wavelength (ppw)')
-    ax.set_ylabel('$|E_2|/|E_1|$ (%)')
-    ax.set_ylim(0, 120)
+    ax.set_ylabel('$|E_2|/|E_1|$ at crystal midpoint (%)')
+    ax.set_ylim(0, 100)
     ax.legend(fontsize=8)
 
     fig.tight_layout()
