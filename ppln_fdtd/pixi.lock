@@ -48,6 +48,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libcblas-3.11.0-5_h0358290_openblas.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libclang-cpp22.1-22.1.0-default_h99862b1_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libclang13-22.1.0-default_h746c552_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/libcufft-12.2.0.37-hecca717_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libcups-2.3.3-h7a8fb5f_6.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libdeflate-1.25-h17f619e_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libdrm-2.4.125-hb03c661_1.conda
@@ -685,6 +686,18 @@ packages:
   purls: []
   size: 12817500
   timestamp: 1772101411287
+- conda: https://conda.anaconda.org/conda-forge/linux-64/libcufft-12.2.0.37-hecca717_0.conda
+  sha256: 5fef778f1e68d1b0a913d6511bec607137e9d2e8e9e44bc564309712e82440fe
+  md5: e7f96ec366228e01de0047d62b94c446
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=13.2,<13.3.0a0
+  - libgcc >=14
+  - libstdcxx >=14
+  license: LicenseRef-NVIDIA-End-User-License-Agreement
+  purls: []
+  size: 184427617
+  timestamp: 1773100202937
 - conda: https://conda.anaconda.org/conda-forge/linux-64/libcups-2.3.3-h7a8fb5f_6.conda
   sha256: 205c4f19550f3647832ec44e35e6d93c8c206782bdd620c1d7cf66237580ff9c
   md5: 49c553b47ff679a6a1e9fc80b9c5a2d4

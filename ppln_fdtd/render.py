@@ -2,16 +2,16 @@
 
 Pure visual display — no text rendering. All text goes to the terminal.
 
-Renders E-fields as color-intensity strips:
-  - E₁ (fundamental) → red/cyan (positive/negative)
-  - E₂ (second harmonic) → blue/yellow (positive/negative)
-  - Poling pattern as alternating red/blue bands
-  - Crystal vs vacuum distinguished by background brightness
+Top panel:  spatial FFT spectrum (line plot, log scale)
+Bottom panel: E-field color intensity + poling pattern
 """
 
 import numpy as np
+import cupy as cp
 import moderngl
 
+
+# ── Shared vertex shader ───────────────────────────────────────────────
 
 VERT_SHADER = """
 #version 330
@@ -23,6 +23,8 @@ void main() {
     uv = in_uv;
 }
 """
+
+# ── Field display (textured quad) ──────────────────────────────────────
 
 FIELD_FRAG = """
 #version 330
@@ -41,27 +43,21 @@ void main() {
     bool in_crystal = uv.x >= crystal_lo && uv.x <= crystal_hi;
     vec3 bg = in_crystal ? vec3(0.08) : vec3(0.03);
 
-    // Poling strip (bottom 6%)
-    if (uv.y < 0.06) {
+    // Poling strip (bottom 8%)
+    if (uv.y < 0.08) {
         vec3 pol = poling > 0.0 ? vec3(0.6, 0.15, 0.1) : vec3(0.1, 0.15, 0.6);
         if (!in_crystal) pol = bg;
         fragColor = vec4(pol, 1.0);
         return;
     }
-    // Separator
-    if (uv.y < 0.065) {
+    if (uv.y < 0.085) {
         fragColor = vec4(0.25, 0.25, 0.25, 1.0);
         return;
     }
 
-    // Field color mapping
     vec3 c = bg;
-
-    // Fundamental: positive=red, negative=cyan
     if (e1 > 0.0) c.r += e1;
     else { c.g += -e1 * 0.5; c.b += -e1 * 0.5; }
-
-    // Second harmonic: positive=blue, negative=yellow
     if (e2 > 0.0) c.b += e2;
     else { c.r += -e2 * 0.4; c.g += -e2 * 0.4; }
 
@@ -69,8 +65,45 @@ void main() {
 }
 """
 
+# ── Spectrum background ───────────────────────────────────────────────
+
+SPEC_BG_FRAG = """
+#version 330
+in vec2 uv;
+out vec4 fragColor;
+void main() {
+    float g = mix(0.05, 0.07, uv.y);
+    fragColor = vec4(vec3(g), 1.0);
+}
+"""
+
+# ── Spectrum line (simple colored line) ────────────────────────────────
+
+LINE_VERT = """
+#version 330
+in vec2 in_pos;
+void main() {
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+"""
+
+LINE_FRAG = """
+#version 330
+uniform vec3 line_color;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(line_color, 1.0);
+}
+"""
+
 
 class Renderer:
+    # Layout: spectrum panel top 30%, field panel bottom 70%
+    SPEC_TOP = 1.0      # NDC
+    SPEC_BOT = 0.4
+    FIELD_TOP = 0.38
+    FIELD_BOT = -1.0
+
     def __init__(self, ctx: moderngl.Context, width: int, height: int, sim):
         self.ctx = ctx
         self.width = width
@@ -81,30 +114,116 @@ class Renderer:
         self.crystal_lo = sim.crystal_start / Nz
         self.crystal_hi = sim.crystal_end / Nz
 
-        # Field texture — downsample to fit GL limits and window
+        # ── Field texture ──
         max_tex = ctx.info['GL_MAX_TEXTURE_SIZE']
         self.tex_width = min(Nz, max_tex, max(width * 2, 4096))
         self.field_data = np.zeros((1, self.tex_width, 4), dtype=np.float32)
         self.field_tex = ctx.texture((self.tex_width, 1), 4, dtype='f4')
         self.field_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
 
-        # Shader
-        self.prog = ctx.program(vertex_shader=VERT_SHADER, fragment_shader=FIELD_FRAG)
-        self.prog['field_tex'] = 0
-        self.prog['crystal_lo'] = self.crystal_lo
-        self.prog['crystal_hi'] = self.crystal_hi
+        # ── Field shader + quad ──
+        self.field_prog = ctx.program(vertex_shader=VERT_SHADER, fragment_shader=FIELD_FRAG)
+        self.field_prog['field_tex'] = 0
+        self.field_prog['crystal_lo'] = self.crystal_lo
+        self.field_prog['crystal_hi'] = self.crystal_hi
 
-        # Fullscreen quad
-        verts = np.array([
-            -1, -1,  0, 0,
-             1, -1,  1, 0,
-             1,  1,  1, 1,
-            -1, -1,  0, 0,
-             1,  1,  1, 1,
-            -1,  1,  0, 1,
+        fb, ft = self.FIELD_BOT, self.FIELD_TOP
+        fv = np.array([
+            -1, fb, 0, 0,  1, fb, 1, 0,  1, ft, 1, 1,
+            -1, fb, 0, 0,  1, ft, 1, 1, -1, ft, 0, 1,
         ], dtype='f4')
-        vbo = ctx.buffer(verts)
-        self.vao = ctx.vertex_array(self.prog, [(vbo, '2f 2f', 'in_pos', 'in_uv')])
+        self.field_vao = ctx.vertex_array(self.field_prog,
+                                          [(ctx.buffer(fv), '2f 2f', 'in_pos', 'in_uv')])
+
+        # ── Spectrum background quad ──
+        self.spec_bg_prog = ctx.program(vertex_shader=VERT_SHADER, fragment_shader=SPEC_BG_FRAG)
+        sb, st = self.SPEC_BOT, self.SPEC_TOP
+        sv = np.array([
+            -1, sb, 0, 0,  1, sb, 1, 0,  1, st, 1, 1,
+            -1, sb, 0, 0,  1, st, 1, 1, -1, st, 0, 1,
+        ], dtype='f4')
+        self.spec_bg_vao = ctx.vertex_array(self.spec_bg_prog,
+                                            [(ctx.buffer(sv), '2f 2f', 'in_pos', 'in_uv')])
+
+        # ── Spectrum line shader ──
+        self.line_prog = ctx.program(vertex_shader=LINE_VERT, fragment_shader=LINE_FRAG)
+
+        # Spectrum line buffers (updated each frame)
+        self.spec_npts = min(width, 2048)
+        self._spec_vbo1 = ctx.buffer(reserve=self.spec_npts * 8)  # 2 floats * 4 bytes
+        self._spec_vbo2 = ctx.buffer(reserve=self.spec_npts * 8)
+        self._spec_vao1 = ctx.vertex_array(self.line_prog,
+                                           [(self._spec_vbo1, '2f', 'in_pos')])
+        self._spec_vao2 = ctx.vertex_array(self.line_prog,
+                                           [(self._spec_vbo2, '2f', 'in_pos')])
+
+        # ── Separator line between panels ──
+        sep_y = (self.SPEC_BOT + self.FIELD_TOP) / 2
+        sep_v = np.array([-1, sep_y, 1, sep_y], dtype='f4')
+        self._sep_vbo = ctx.buffer(sep_v)
+        self._sep_vao = ctx.vertex_array(self.line_prog,
+                                         [(self._sep_vbo, '2f', 'in_pos')])
+
+        # ── Precompute FFT frequency axis ──
+        # Spatial FFT of E-field: freq in cycles/meter
+        dk = 1.0 / (Nz * sim.dz)  # frequency resolution
+        self._fft_freqs_full = cp.arange(Nz // 2) * dk  # positive frequencies
+        # Expected k-vectors for reference lines
+        self._k1 = sim.n1 / (sim.lambda_fund_um * 1e-6)  # cycles/m
+        self._k2 = sim.n2 / (sim.lambda_fund_um * 0.5e-6)
+        # Display range: 0 to 1.5 * k2
+        self._k_max = 1.5 * self._k2
+
+    def _compute_spectrum(self):
+        """Compute spatial FFT of E1 and E2 on GPU, return downsampled log magnitudes."""
+        E1_gpu = self.sim.E1
+        E2_gpu = self.sim.E2
+
+        # FFT on GPU
+        fft1 = cp.abs(cp.fft.rfft(E1_gpu))
+        fft2 = cp.abs(cp.fft.rfft(E2_gpu))
+
+        # Trim to display range
+        Nf = len(fft1)
+        freqs = self._fft_freqs_full[:Nf]
+        mask = freqs <= self._k_max
+        n_keep = int(cp.sum(mask))
+        if n_keep < 2:
+            return None, None
+
+        s1 = fft1[:n_keep].get()
+        s2 = fft2[:n_keep].get()
+
+        # Log scale with floor
+        floor = 1e-10
+        s1 = np.log10(np.maximum(s1, floor))
+        s2 = np.log10(np.maximum(s2, floor))
+
+        # Normalize to [0, 1] range using shared scale
+        vmax = max(s1.max(), s2.max(), -5)
+        vmin = min(vmax - 6, -10)  # 6 decades of dynamic range
+        s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
+        s2 = np.clip((s2 - vmin) / (vmax - vmin), 0, 1)
+
+        # Downsample to spec_npts
+        npts = self.spec_npts
+        if len(s1) > npts:
+            idx = np.linspace(0, len(s1) - 1, npts).astype(int)
+            s1 = s1[idx]
+            s2 = s2[idx]
+
+        return s1, s2
+
+    def _build_line_verts(self, spectrum: np.ndarray) -> np.ndarray:
+        """Convert normalized spectrum [0,1] to NDC vertex positions in spectrum panel."""
+        n = len(spectrum)
+        x = np.linspace(-1.0, 1.0, n).astype(np.float32)
+        # Map spectrum [0,1] to NDC y in [SPEC_BOT, SPEC_TOP] with margin
+        margin = 0.05 * (self.SPEC_TOP - self.SPEC_BOT)
+        y_lo = self.SPEC_BOT + margin
+        y_hi = self.SPEC_TOP - margin
+        y = (y_lo + spectrum * (y_hi - y_lo)).astype(np.float32)
+        return np.column_stack([x, y]).astype(np.float32)
 
     def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
         """Downsample fields and upload to GPU texture."""
@@ -134,11 +253,55 @@ class Renderer:
         self.field_tex.write(data.tobytes())
 
     def render(self, E1: np.ndarray, E2: np.ndarray):
-        """Render one frame."""
+        """Render one frame: spectrum panel + field panel."""
         self.ctx.clear(0.05, 0.05, 0.05)
+
+        # ── Field panel ──
         self.update_field_texture(E1, E2)
         self.field_tex.use(0)
-        self.vao.render()
+        self.field_vao.render()
+
+        # ── Spectrum panel background ──
+        self.spec_bg_vao.render()
+
+        # ── Separator ──
+        self.line_prog['line_color'] = (0.3, 0.3, 0.3)
+        self._sep_vao.render(moderngl.LINES)
+
+        # ── Spectrum lines ──
+        s1, s2 = self._compute_spectrum()
+        if s1 is not None:
+            # E1 spectrum (red)
+            verts1 = self._build_line_verts(s1)
+            self._spec_vbo1.orphan(len(verts1.tobytes()))
+            self._spec_vbo1.write(verts1.tobytes())
+            self.line_prog['line_color'] = (0.9, 0.2, 0.2)
+            self._spec_vao1.render(moderngl.LINE_STRIP, vertices=len(verts1))
+
+            # E2 spectrum (blue)
+            verts2 = self._build_line_verts(s2)
+            self._spec_vbo2.orphan(len(verts2.tobytes()))
+            self._spec_vbo2.write(verts2.tobytes())
+            self.line_prog['line_color'] = (0.3, 0.4, 1.0)
+            self._spec_vao2.render(moderngl.LINE_STRIP, vertices=len(verts2))
+
+            # Reference lines for k₁ and k₂
+            self._draw_ref_line(self._k1, (0.5, 0.2, 0.2))
+            self._draw_ref_line(self._k2, (0.2, 0.2, 0.5))
+
+    def _draw_ref_line(self, k_val: float, color: tuple):
+        """Draw a vertical dashed reference line at wavenumber k_val."""
+        x_ndc = -1.0 + 2.0 * (k_val / self._k_max)
+        if x_ndc < -1 or x_ndc > 1:
+            return
+        # Draw as a simple vertical line
+        verts = np.array([x_ndc, self.SPEC_BOT, x_ndc, self.SPEC_TOP], dtype='f4')
+        vbo = self.ctx.buffer(verts)
+        vao = self.ctx.vertex_array(self.line_prog, [(vbo, '2f', 'in_pos')])
+        self.line_prog['line_color'] = color
+        vao.render(moderngl.LINES)
+        vao.release()
+        vbo.release()
 
     def resize(self, width: int, height: int):
         self.width = width
