@@ -176,10 +176,54 @@ class Renderer:
         self._k2 = sim.n2 / (sim.lambda_fund_um * 0.5e-6)
         # Display range: 0 to 1.5 * k2
         self._k_max = 1.5 * self._k2
-        # Spectrum scale lock
+        # Spectrum scale — calibrate by running sim to find peak
         self._spec_vmax_locked = None
         self._spec_vmin = -20.0
         self._spec_vmax = -8.0
+        self._calibrate_spectrum_scale(sim)
+
+    def _calibrate_spectrum_scale(self, sim):
+        """Run sim forward to find peak spectrum power, then reset."""
+        import copy
+        # Save state
+        saved_n = sim.n_step
+        saved_E1 = sim.E1.copy()
+        saved_H1 = sim.H1.copy()
+        saved_D1 = sim.D1.copy()
+        saved_E2 = sim.E2.copy()
+        saved_H2 = sim.H2.copy()
+        saved_D2 = sim.D2.copy()
+        saved_mur = sim._mur_prev.copy()
+
+        # Run until pulse is well into crystal (peak power)
+        crystal_mid = (sim.crystal_start + sim.crystal_end) / 2
+        v_vac = sim.courant
+        v_xtal = sim.courant / sim.n1
+        steps_to_mid = int((sim.crystal_start - sim.source_idx) / v_vac
+                          + (crystal_mid - sim.crystal_start) / v_xtal
+                          + sim.t0 / sim.dt)
+        sim.step(steps_to_mid)
+
+        # Measure peak
+        fft1 = cp.abs(cp.fft.rfft(sim.E1))
+        fft2 = cp.abs(cp.fft.rfft(sim.E2))
+        peak = max(float(fft1.max()), float(fft2.max()), 1e-20)
+        peak_db = np.log10(peak ** 2)
+
+        # Set scale: 1 decade headroom above peak, 8 decades total
+        self._spec_vmax_locked = peak_db + 1
+        self._spec_vmax = self._spec_vmax_locked
+        self._spec_vmin = self._spec_vmax - 8
+
+        # Restore state
+        sim.E1[:] = saved_E1
+        sim.H1[:] = saved_H1
+        sim.D1[:] = saved_D1
+        sim.E2[:] = saved_E2
+        sim.H2[:] = saved_H2
+        sim.D2[:] = saved_D2
+        sim._mur_prev[:] = saved_mur
+        sim.n_step = saved_n
 
     def _compute_spectrum(self):
         """Compute spatial FFT of E1 and E2 on GPU, return downsampled log magnitudes."""
@@ -206,18 +250,8 @@ class Renderer:
         s1 = np.log10(np.maximum(s1 ** 2, floor))
         s2 = np.log10(np.maximum(s2 ** 2, floor))
 
-        # Lock scale once established, with 2 decades headroom above peak
-        vmax_now = max(s1.max(), s2.max(), -10)
-        if self._spec_vmax_locked is None:
-            if vmax_now > -5:  # pulse has meaningful power
-                self._spec_vmax_locked = vmax_now + 2  # 20 dB headroom
-            vmax = vmax_now + 2
-        else:
-            vmax = self._spec_vmax_locked
-
-        vmin = vmax - 8  # 8 decades = 80 dB dynamic range
-        self._spec_vmin = vmin
-        self._spec_vmax = vmax
+        vmax = self._spec_vmax
+        vmin = self._spec_vmin
         s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
         s2 = np.clip((s2 - vmin) / (vmax - vmin), 0, 1)
 
@@ -249,7 +283,7 @@ class Renderer:
         self._d_z_cache = None
 
     def reset_spectrum_scale(self):
-        self._spec_vmax_locked = None
+        self._calibrate_spectrum_scale(self.sim)
 
     def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
         """Extract visible zoom range and upload at up to 1:1 resolution."""
