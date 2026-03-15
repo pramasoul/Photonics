@@ -8,6 +8,7 @@ version = "0.1.0"
 [tasks]
 run = "python main.py"
 gl = "python main_gl.py"
+scope = "python scope.py"
 
 [dependencies]
 python = ">=3.11"

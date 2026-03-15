@@ -33,6 +33,7 @@ HELP = """\
   3 / 4     R_sh (2ω face reflectivity)  −/+
   [ / ]     spectrum ref level  −/+ 10 dB
   { / }     spectrum range  −/+ 1 decade
+  s         save snapshot (view with: pixi run scope)
   f         toggle interpolation (linear / nearest)
   h         toggle this help
   q / ESC   quit
@@ -212,6 +213,40 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
     sys.stdout.flush()
 
 
+SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), 'snapshot.npz')
+
+
+def save_snapshot(sim):
+    """Dump current simulation state to snapshot.npz."""
+    import cupy as cp
+    E1, E2 = sim.get_fields()
+    z_um = sim.get_z_host()
+    d_z = sim.d_z.get()
+
+    # Spatial FFT (on GPU, bring to host)
+    fft1 = cp.abs(cp.fft.rfft(sim.E1)).get()
+    fft2 = cp.abs(cp.fft.rfft(sim.E2)).get()
+    dk = 1.0 / (sim.Nz * sim.dz)
+    fft_k = np.arange(len(fft1)) * dk
+
+    np.savez(SNAPSHOT_PATH,
+             E1=E1, E2=E2, z_um=z_um, d_z=d_z,
+             fft1=fft1, fft2=fft2, fft_k=fft_k,
+             t_ps=sim.current_time_ps,
+             Lambda_um=sim.Lambda * 1e6,
+             T_celsius=sim.T,
+             boost=sim.boost,
+             n1=sim.n1, n2=sim.n2,
+             crystal_start=sim.crystal_start,
+             crystal_end=sim.crystal_end,
+             dz=sim.dz,
+             R_pump=sim.R_pump,
+             R_sh=sim.R_sh,
+             pulse_width_fs=sim.pulse_width_s * 1e15)
+    sys.stdout.write(f"\r  >> Snapshot saved to {SNAPSHOT_PATH}\x1b[K\n")
+    sys.stdout.flush()
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -309,7 +344,7 @@ def main():
         glfw.KEY_L: 'l', glfw.KEY_SEMICOLON: ';',
         glfw.KEY_T: 't', glfw.KEY_Y: 'y',
         glfw.KEY_B: 'b', glfw.KEY_N: 'n',
-        glfw.KEY_P: 'p', glfw.KEY_O: 'o', glfw.KEY_F: 'f',
+        glfw.KEY_P: 'p', glfw.KEY_O: 'o', glfw.KEY_F: 'f', glfw.KEY_S: 's',
         glfw.KEY_EQUAL: '+', glfw.KEY_MINUS: '-',
         glfw.KEY_KP_ADD: '+', glfw.KEY_KP_SUBTRACT: '-',
         glfw.KEY_1: '1', glfw.KEY_2: '2', glfw.KEY_3: '3', glfw.KEY_4: '4',
@@ -400,6 +435,8 @@ def main():
                 elif key == '4':
                     r = min(1.0, sim.R_sh[0] + 0.05)
                     sim.set_R_sh(left=r, right=r)
+                elif key == 's':
+                    save_snapshot(sim)
                 elif key == '[':
                     renderer.adjust_spec_ref(-1.0)
                     needs_redraw[0] = True
