@@ -29,22 +29,18 @@ void main() {
 FIELD_FRAG = """
 #version 330
 uniform sampler2D field_tex;
-uniform float crystal_lo;
+uniform float crystal_lo;  // crystal edges in screen [0,1] space (adjusted for zoom)
 uniform float crystal_hi;
-uniform float zoom_lo;   // left edge of view in [0,1] UV space
-uniform float zoom_hi;   // right edge of view in [0,1] UV space
 in vec2 uv;
 out vec4 fragColor;
 
 void main() {
-    // Map screen uv.x [0,1] to zoomed texture coordinate
-    float tx = zoom_lo + uv.x * (zoom_hi - zoom_lo);
-    vec4 f = texture(field_tex, vec2(tx, 0.5));
+    vec4 f = texture(field_tex, vec2(uv.x, 0.5));
     float e1 = f.r;
     float e2 = f.b;
     float poling = f.a;
 
-    bool in_crystal = tx >= crystal_lo && tx <= crystal_hi;
+    bool in_crystal = uv.x >= crystal_lo && uv.x <= crystal_hi;
     vec3 bg = in_crystal ? vec3(0.08) : vec3(0.03);
 
     // Poling strip (bottom 8%)
@@ -122,21 +118,17 @@ class Renderer:
         self.crystal_lo = sim.crystal_start / Nz
         self.crystal_hi = sim.crystal_end / Nz
 
-        # ── Field texture ──
-        max_tex = ctx.info['GL_MAX_TEXTURE_SIZE']
-        self.tex_width = min(Nz, max_tex, max(width * 2, 4096))
-        self.field_data = np.zeros((1, self.tex_width, 4), dtype=np.float32)
-        self.field_tex = ctx.texture((self.tex_width, 1), 4, dtype='f4')
+        # ── Field texture (rebuilt each frame to match visible range) ──
+        self.max_tex = ctx.info['GL_MAX_TEXTURE_SIZE']
         self.nearest_mode = False
-        self.field_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._tex_width_current = 0
+        self.field_tex = None
+        self.field_data = None
+        self._d_z_cache = None  # cached poling data on host
 
         # ── Field shader + quad ──
         self.field_prog = ctx.program(vertex_shader=VERT_SHADER, fragment_shader=FIELD_FRAG)
         self.field_prog['field_tex'] = 0
-        self.field_prog['zoom_lo'] = 0.0
-        self.field_prog['zoom_hi'] = 1.0
-        self.field_prog['crystal_lo'] = self.crystal_lo
-        self.field_prog['crystal_hi'] = self.crystal_hi
 
         fb, ft = self.FIELD_BOT, self.FIELD_TOP
         fv = np.array([
@@ -236,40 +228,72 @@ class Renderer:
         y = (y_lo + spectrum * (y_hi - y_lo)).astype(np.float32)
         return np.column_stack([x, y]).astype(np.float32)
 
-    def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
-        """Downsample fields and upload to GPU texture."""
-        Nz = len(E1)
-        tw = self.tex_width
-        data = self.field_data
+    def _ensure_d_z_cache(self):
+        if self._d_z_cache is None:
+            self._d_z_cache = self.sim.d_z.get()
 
-        if Nz != tw:
-            idx = np.linspace(0, Nz - 1, tw).astype(int)
-            e1 = E1[idx]
-            e2 = E2[idx]
-            d_z = self.sim.d_z.get()[idx]
+    def invalidate_poling_cache(self):
+        self._d_z_cache = None
+
+    def update_field_texture(self, E1: np.ndarray, E2: np.ndarray):
+        """Extract visible zoom range and upload at up to 1:1 resolution."""
+        Nz = len(E1)
+        self._ensure_d_z_cache()
+
+        # Visible cell range
+        i_lo = int(self.zoom_lo * Nz)
+        i_hi = min(int(np.ceil(self.zoom_hi * Nz)), Nz)
+        n_visible = i_hi - i_lo
+
+        # Texture width: use full cell count if it fits, else downsample to screen width
+        tw = min(n_visible, self.max_tex, max(self.width, 1024))
+
+        # Reallocate texture if size changed
+        if tw != self._tex_width_current:
+            if self.field_tex is not None:
+                self.field_tex.release()
+            self.field_tex = self.ctx.texture((tw, 1), 4, dtype='f4')
+            mode = moderngl.NEAREST if self.nearest_mode else moderngl.LINEAR
+            self.field_tex.filter = (mode, mode)
+            self.field_data = np.zeros((1, tw, 4), dtype=np.float32)
+            self._tex_width_current = tw
+
+        # Extract visible slice, downsample if needed
+        if n_visible > tw:
+            idx = np.linspace(i_lo, i_hi - 1, tw).astype(int)
         else:
-            e1, e2 = E1, E2
-            d_z = self.sim.d_z.get()
+            idx = np.arange(i_lo, i_hi)
+            # Pad if rounding gave fewer cells than texture width
+            if len(idx) < tw:
+                idx = np.linspace(i_lo, i_hi - 1, tw).astype(int)
+
+        e1 = E1[idx]
+        e2 = E2[idx]
+        d_z = self._d_z_cache[idx]
 
         max_e1 = max(np.max(np.abs(e1)), 1e-10)
         max_e2 = max(np.max(np.abs(e2)), 1e-10)
         scale1 = min(max_e1, 2.0)
         scale2 = max(scale1 * 0.3, max_e2)
 
-        data[0, :, 0] = e1 / scale1
-        data[0, :, 1] = 0
-        data[0, :, 2] = e2 / scale2
-        data[0, :, 3] = d_z
+        data = self.field_data
+        data[0, :len(idx), 0] = e1 / scale1
+        data[0, :len(idx), 1] = 0
+        data[0, :len(idx), 2] = e2 / scale2
+        data[0, :len(idx), 3] = d_z
 
         self.field_tex.write(data.tobytes())
+
+        # Update crystal markers relative to current zoom window
+        zoom_span = self.zoom_hi - self.zoom_lo
+        self.field_prog['crystal_lo'] = (self.crystal_lo - self.zoom_lo) / zoom_span
+        self.field_prog['crystal_hi'] = (self.crystal_hi - self.zoom_lo) / zoom_span
 
     def render(self, E1: np.ndarray, E2: np.ndarray):
         """Render one frame: spectrum panel + field panel."""
         self.ctx.clear(0.05, 0.05, 0.05)
 
-        # ── Field panel (with zoom) ──
-        self.field_prog['zoom_lo'] = self.zoom_lo
-        self.field_prog['zoom_hi'] = self.zoom_hi
+        # ── Field panel ──
         self.update_field_texture(E1, E2)
         self.field_tex.use(0)
         self.field_vao.render()
@@ -330,8 +354,9 @@ class Renderer:
     def toggle_nearest(self):
         """Toggle between linear interpolation and nearest-neighbor (hard cell boundaries)."""
         self.nearest_mode = not self.nearest_mode
-        mode = moderngl.NEAREST if self.nearest_mode else moderngl.LINEAR
-        self.field_tex.filter = (mode, mode)
+        if self.field_tex is not None:
+            mode = moderngl.NEAREST if self.nearest_mode else moderngl.LINEAR
+            self.field_tex.filter = (mode, mode)
 
     def pan(self, dx_frac: float):
         """Pan the view by dx_frac of the current view width."""

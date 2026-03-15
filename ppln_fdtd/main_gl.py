@@ -255,8 +255,10 @@ def main():
                     new_L = sim.Lambda - 0.1e-6
                     if new_L > 1e-6:
                         sim.rebuild_poling(new_L)
+                        renderer.invalidate_poling_cache()
                 elif key == ';':
                     sim.rebuild_poling(sim.Lambda + 0.1e-6)
+                    renderer.invalidate_poling_cache()
                 elif key == 't':
                     sim.update_temperature(max(20, sim.T - 5))
                 elif key == 'y':
