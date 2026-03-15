@@ -187,6 +187,7 @@ class FDTDSimulation:
 
         self.n_step = 0
         self._mur_prev = cp.zeros(8, dtype=cp.float64)
+        self._mr_cached = 0.0
         self._mur_coeff = (C * self.dt - self.dz) / (C * self.dt + self.dz)
 
         I_W_m2 = self.peak_intensity_W_cm2 * 1e4
@@ -300,6 +301,7 @@ class FDTDSimulation:
         self._alloc_fields()
         self.n_step = 0
         self._mur_prev = cp.zeros(8, dtype=cp.float64)
+        self._mr_cached = 0.0
         self.probe_E1.clear()
         self.probe_E2.clear()
         self.probe_times.clear()
@@ -347,6 +349,10 @@ class FDTDSimulation:
         inv_2sig2 = -1.0 / (2.0 * self.pulse_width_s ** 2)
 
         probe_vals = []
+        mrc1 = self._mr_c1
+        mrc2 = self._mr_c2
+        cs_py = self.crystal_start
+        ce_py = self.crystal_end
 
         for _ in range(n_steps):
             t = self.n_step * dt
@@ -358,6 +364,16 @@ class FDTDSimulation:
                     inv_eps1, inv_eps2, d_z, mp,
                     ch, nl2, nl1, mc, src,
                     si, cs, ce, nz))
+
+            # Global MR projection every 100 steps (amortize GPU sync cost)
+            if self.n_step % 100 == 99:
+                mr_now = mrc1 * cp.sum(E1 ** 2) + mrc2 * cp.sum(E2 ** 2)
+                if self._mr_cached > 1e-30 and float(mr_now) > 1e-30:
+                    ratio = cp.sqrt(self._mr_cached / mr_now)
+                    E1[cs_py:ce_py] *= ratio
+                    E2[cs_py:ce_py] *= ratio
+                self._mr_cached = float(
+                    mrc1 * cp.sum(E1 ** 2) + mrc2 * cp.sum(E2 ** 2))
 
             self.n_step += 1
 
