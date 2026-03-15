@@ -197,14 +197,13 @@ class Renderer:
         s1 = fft1[:n_keep].get()
         s2 = fft2[:n_keep].get()
 
-        # Log scale with floor
-        floor = 1e-10
-        s1 = np.log10(np.maximum(s1, floor))
-        s2 = np.log10(np.maximum(s2, floor))
+        # Power spectrum (|FFT|²), log scale, shared normalization
+        floor = 1e-20
+        s1 = np.log10(np.maximum(s1 ** 2, floor))
+        s2 = np.log10(np.maximum(s2 ** 2, floor))
 
-        # Normalize to [0, 1] range using shared scale
-        vmax = max(s1.max(), s2.max(), -5)
-        vmin = min(vmax - 6, -10)  # 6 decades of dynamic range
+        vmax = max(s1.max(), s2.max(), -10)
+        vmin = min(vmax - 12, -20)  # 12 decades of dynamic range
         s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
         s2 = np.clip((s2 - vmin) / (vmax - vmin), 0, 1)
 

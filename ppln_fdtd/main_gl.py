@@ -101,11 +101,15 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
     e_now, e_ref = energy_info
     e_ratio = f"{e_now / e_ref:.10f}" if e_ref > 0 else "—"
 
+    # Domain count: crystal length / (Lambda/2) = number of half-periods
+    n_domains = int(sim.crystal_length / (sim.Lambda / 2)) if sim.Lambda > 0 else 0
+
     lines = [
         f"  PPLN 1D FDTD Explorer          {'[PAUSED]' if paused else ''}",
-        f"  ────────────────────────────────────────────",
+        f"  ────────────────────────────────────────────────────────────────",
         f"  t = {sim.current_time_ps:8.2f} ps     fps = {fps:5.1f}     steps/frame = {steps_per_frame}",
-        f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm",
+        f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm"
+        f"     domains = {n_domains}",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
         f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}"
         f"     R_pump={sim.R_pump[0]:.2f}  R_sh={sim.R_sh[0]:.2f}",
