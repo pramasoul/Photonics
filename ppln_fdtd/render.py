@@ -98,10 +98,10 @@ void main() {
 
 
 class Renderer:
-    # Layout: spectrum panel top 30%, field panel bottom 70%
+    # Layout: spectrum takes most of the window, field is a thin strip at bottom
     SPEC_TOP = 1.0      # NDC
-    SPEC_BOT = 0.4
-    FIELD_TOP = 0.38
+    SPEC_BOT = -0.6
+    FIELD_TOP = -0.62
     FIELD_BOT = -1.0
 
     def __init__(self, ctx: moderngl.Context, width: int, height: int, sim):
@@ -215,7 +215,7 @@ class Renderer:
         else:
             vmax = self._spec_vmax_locked
 
-        vmin = vmax - 12  # 12 decades = 120 dB dynamic range
+        vmin = vmax - 30  # 30 decades = 300 dB dynamic range
         self._spec_vmin = vmin
         self._spec_vmax = vmax
         s1 = np.clip((s1 - vmin) / (vmax - vmin), 0, 1)
