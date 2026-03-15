@@ -27,8 +27,12 @@ void fdtd_step(
     const double* __restrict__ d_z,
     double* __restrict__ mur_prev,
     double ch,
-    double nl_coeff2,       // chi2 / n2^2
-    double nl_coeff1,       // 2 * chi2 / n1^2
+    double nl_coeff2,       // chi2 / n2^2  (SHG)
+    double nl_coeff1,       // chi2 / (2*n1^2)  (back-conv, MR-matched)
+    double mr_c1,           // eps1 / omega1
+    double mr_c2,           // eps2 / omega2
+    double omega1,          // fundamental angular frequency
+    double omega2,          // SH angular frequency
     double mur_coeff,
     double src_val,
     int src_idx,
@@ -64,17 +68,44 @@ void fdtd_step(
     }
     __syncthreads();
 
-    // ── ΔP_NL nonlinear coupling ──
-    // SHG:  ΔE₂ = -χ⁽²⁾·d·(E₁_new² - E₁_old²) / n₂²
-    // Back: ΔE₁ = -2χ⁽²⁾·d·E₂_old·(E₁_new - E₁_old) / n₁²
+    // ── Nonlinear coupling with MR projection ──
+    // Both sources computed from same pre-coupling state (simultaneous)
+    // Then project onto Manley-Rowe manifold
     if (i >= cs && i < ce) {
         double d = d_z[i];
-        double e1_new = E1[i];
-        double dE1sq = e1_new * e1_new - e1_old * e1_old;
-        double dE2E1 = e2_old * (e1_new - e1_old);
+        double e1 = E1[i];   // post-Yee, pre-coupling
+        double e2 = E2[i];
 
-        E2[i] -= nl_coeff2 * d * dE1sq;
-        E1[i] -= nl_coeff1 * d * dE2E1;
+        // Compute both sources from same state
+        double dE1sq = e1 * e1 - e1_old * e1_old;
+        double dE2E1 = e2 * (e1 - e1_old);  // uses pre-coupling e2
+
+        double src2 = -nl_coeff2 * d * dE1sq;
+        double src1 = -nl_coeff1 * d * dE2E1;
+
+        // Tentative update
+        double e1_tent = e1 + src1;
+        double e2_tent = e2 + src2;
+
+        // Energy projection: enforce ε₁E₁² + ε₂E₂² = const per cell
+        // (total energy conservation: SHG transfers, doesn't create)
+        double eps1_local = mr_c1 * omega1;  // = ε₀n₁² (mr_c1 = ε₁/ω₁)
+        double eps2_local = mr_c2 * omega2;  // = ε₀n₂²
+        double u_before = eps1_local * e1 * e1 + eps2_local * e2 * e2;
+        double u_after  = eps1_local * e1_tent * e1_tent + eps2_local * e2_tent * e2_tent;
+        double du = u_after - u_before;
+
+        // Correct E₁ to absorb the energy violation (clamped)
+        double e1sq = e1_tent * e1_tent;
+        if (e1sq > 1e-30) {
+            double corr = 0.5 * du / (eps1_local * e1sq);
+            if (corr > 0.05) corr = 0.05;
+            if (corr < -0.05) corr = -0.05;
+            e1_tent *= (1.0 - corr);
+        }
+
+        E1[i] = e1_tent;
+        E2[i] = e2_tent;
     }
     __syncthreads();
 
@@ -195,8 +226,11 @@ class FDTDSimulation:
 
     def _compute_coupling(self):
         chi2 = 2.0 * D33 * self.boost
-        self._nl_coeff2 = chi2 / self.n2 ** 2
-        self._nl_coeff1 = 2.0 * chi2 / self.n1 ** 2
+        self._nl_coeff2 = chi2 / self.n2 ** 2          # SHG: ΔE₂ source
+        self._nl_coeff1 = chi2 / (2.0 * self.n1 ** 2)  # back-conv: MR-matched ratio
+        # MR weights: εᵢ/ωᵢ = ε₀nᵢ²/ωᵢ
+        self._mr_c1 = EPS0 * self.n1 ** 2 / self.omega1
+        self._mr_c2 = EPS0 * self.n2 ** 2 / self.omega2
 
     def _build_eps(self):
         Nz = self.Nz
@@ -299,6 +333,8 @@ class FDTDSimulation:
         ch = self.ch
         nl2 = self._nl_coeff2
         nl1 = self._nl_coeff1
+        mrc1 = self._mr_c1
+        mrc2 = self._mr_c2
         mc = self._mur_coeff
         si = np.int32(self.source_idx)
         cs = np.int32(self.crystal_start)
@@ -322,7 +358,8 @@ class FDTDSimulation:
             kernel(grid, block,
                    (E1, H1, E2, H2,
                     inv_eps1, inv_eps2, d_z, mp,
-                    ch, nl2, nl1, mc, src,
+                    ch, nl2, nl1, mrc1, mrc2,
+                    self.omega1, self.omega2, mc, src,
                     si, cs, ce, nz))
 
             self.n_step += 1
