@@ -3,6 +3,7 @@ crystal_length: 500.0     # μm
 temperature: 25.0         # °C
 boost: 1.0
 peak_intensity: 1.0e9     # W/cm² (1 GW/cm²)
+ppw: 40                   # points per SH wavelength (20=fast, 80=accurate)
 pulse_width: 200.0        # fs
 poling_period: null        # μm, null = auto QPM
 steps_per_frame: 500
