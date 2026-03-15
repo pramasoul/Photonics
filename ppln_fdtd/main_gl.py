@@ -67,7 +67,7 @@ DEFAULTS = dict(
     record_end=None,        # ps, stop recording
     record_interval=0.01,   # ps between snapshots (default 10 fs)
     record_dir='recordings',
-    mr_interval=100,        # global MR projection every N steps
+    mr_interval=0,          # global MR projection every N steps (0=off)
 )
 
 
