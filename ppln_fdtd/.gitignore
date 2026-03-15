@@ -3,3 +3,13 @@
 !.pixi/config.toml
 
 __pycache__/
+
+# Simulation artifacts
+snapshot.npz
+recordings/
+instability_snaps/
+
+# Editor backups
+\#*\#
+*~
+.*.swp
