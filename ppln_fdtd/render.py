@@ -127,6 +127,7 @@ class Renderer:
         self.tex_width = min(Nz, max_tex, max(width * 2, 4096))
         self.field_data = np.zeros((1, self.tex_width, 4), dtype=np.float32)
         self.field_tex = ctx.texture((self.tex_width, 1), 4, dtype='f4')
+        self.nearest_mode = False
         self.field_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
 
         # ── Field shader + quad ──
@@ -325,6 +326,12 @@ class Renderer:
         if self.zoom_hi - self.zoom_lo > 0.99:
             self.zoom_lo = 0.0
             self.zoom_hi = 1.0
+
+    def toggle_nearest(self):
+        """Toggle between linear interpolation and nearest-neighbor (hard cell boundaries)."""
+        self.nearest_mode = not self.nearest_mode
+        mode = moderngl.NEAREST if self.nearest_mode else moderngl.LINEAR
+        self.field_tex.filter = (mode, mode)
 
     def pan(self, dx_frac: float):
         """Pan the view by dx_frac of the current view width."""

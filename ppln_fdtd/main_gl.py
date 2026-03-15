@@ -27,6 +27,7 @@ HELP = """\
   t / y     temperature  −/+ 5°C
   b / n     χ⁽²⁾ boost  −/+ (log)
   p / o     pulse width  −/+ 50 fs
+  f         toggle interpolation (linear / nearest)
   h         toggle this help
   q / ESC   quit
 
@@ -83,7 +84,7 @@ class Terminal:
             sys.stdout.flush()
 
 
-def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info):
+def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, renderer=None):
     """Print status block to terminal, overwriting previous output."""
     sys.stdout.write('\x1b[H')  # cursor home
 
@@ -105,7 +106,8 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info):
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs",
         f"  max|E₁| = {max_e1:.4f}   max|E₂| = {max_e2:.5f}",
-        f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}",
+        f"  energy = {e_now:.6e}   E/E₀ = {e_ratio}"
+        f"{'   [NEAREST]' if renderer and renderer.nearest_mode else ''}",
         f"",
     ]
 
@@ -199,7 +201,7 @@ def main():
         glfw.KEY_L: 'l', glfw.KEY_SEMICOLON: ';',
         glfw.KEY_T: 't', glfw.KEY_Y: 'y',
         glfw.KEY_B: 'b', glfw.KEY_N: 'n',
-        glfw.KEY_P: 'p', glfw.KEY_O: 'o',
+        glfw.KEY_P: 'p', glfw.KEY_O: 'o', glfw.KEY_F: 'f',
         glfw.KEY_EQUAL: '+', glfw.KEY_MINUS: '-',
         glfw.KEY_KP_ADD: '+', glfw.KEY_KP_SUBTRACT: '-',
     }
@@ -242,6 +244,9 @@ def main():
                 elif key == 'r':
                     sim.reset()
                     energy_ref_set = False
+                elif key == 'f':
+                    renderer.toggle_nearest()
+                    needs_redraw[0] = True
                 elif key == '+' or key == '=':
                     steps_per_frame = min(int(steps_per_frame * 1.5), spf_max)
                 elif key == '-' or key == '_':
@@ -297,7 +302,7 @@ def main():
                     energy_ref_set = True
 
                 print_status(sim, steps_per_frame, fps, paused, show_help,
-                             (energy_now, energy_ref))
+                             (energy_now, energy_ref), renderer)
 
     finally:
         term.restore()
