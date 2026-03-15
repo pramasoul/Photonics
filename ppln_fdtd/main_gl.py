@@ -63,6 +63,10 @@ DEFAULTS = dict(
     spec_decades=8.0,
     width=1600,
     height=800,
+    record_start=None,      # ps, start recording snapshots
+    record_end=None,        # ps, stop recording
+    record_interval=0.01,   # ps between snapshots (default 10 fs)
+    record_dir='recordings',
 )
 
 
@@ -137,6 +141,14 @@ def build_parser():
                    help='Window width (pixels)')
     p.add_argument('--height', type=int, default=None,
                    help='Window height (pixels)')
+    p.add_argument('--record-start', type=float, default=None,
+                   help='Start recording snapshots at this time (ps)')
+    p.add_argument('--record-end', type=float, default=None,
+                   help='Stop recording at this time (ps)')
+    p.add_argument('--record-interval', type=float, default=None,
+                   help='Interval between snapshots (ps, default 0.01=10fs)')
+    p.add_argument('--record-dir', type=str, default=None,
+                   help='Directory for snapshot recordings')
     return p
 
 
@@ -284,6 +296,22 @@ def main():
         sim.set_R_pump(left=cfg['R_pump'], right=cfg['R_pump'])
     if cfg['R_sh'] > 0:
         sim.set_R_sh(left=cfg['R_sh'], right=cfg['R_sh'])
+
+    # ── Recording setup ──
+    rec_start = cfg.get('record_start')
+    rec_end = cfg.get('record_end')
+    rec_interval = cfg.get('record_interval', 0.01)
+    rec_dir = cfg.get('record_dir', 'recordings')
+    recording = rec_start is not None
+    rec_next_ps = rec_start if recording else None
+    rec_count = 0
+
+    if recording:
+        os.makedirs(rec_dir, exist_ok=True)
+        if rec_end is None:
+            # Default: record for 2ps after start
+            rec_end = rec_start + 2.0
+        sys.stderr.write(f"Recording: {rec_start}–{rec_end} ps every {rec_interval} ps → {rec_dir}/\n")
 
     # ── Window ──
     if not glfw.init():
@@ -476,6 +504,34 @@ def main():
                 E1, E2 = sim.get_fields()
                 renderer.render(E1, E2)
                 glfw.swap_buffers(window)
+
+                # ── Recording ──
+                if recording and rec_next_ps is not None:
+                    t = sim.current_time_ps
+                    if t >= rec_next_ps and t <= rec_end:
+                        import cupy as cp
+                        fft1 = cp.abs(cp.fft.rfft(sim.E1)).get()
+                        fft2 = cp.abs(cp.fft.rfft(sim.E2)).get()
+                        dk = 1.0 / (sim.Nz * sim.dz)
+                        fft_k = np.arange(len(fft1)) * dk
+                        fname = os.path.join(rec_dir, f'snap_{rec_count:05d}_{t:.4f}ps.npz')
+                        np.savez(fname, E1=E1, E2=E2, z_um=sim.get_z_host(),
+                                 d_z=sim.d_z.get(), fft1=fft1, fft2=fft2, fft_k=fft_k,
+                                 t_ps=t, Lambda_um=sim.Lambda*1e6, T_celsius=sim.T,
+                                 boost=sim.boost, n1=sim.n1, n2=sim.n2,
+                                 crystal_start=sim.crystal_start,
+                                 crystal_end=sim.crystal_end, dz=sim.dz,
+                                 R_pump=sim.R_pump, R_sh=sim.R_sh,
+                                 pulse_width_fs=sim.pulse_width_s*1e15,
+                                 ppw=sim.ppw, peak_intensity=sim.peak_intensity_W_cm2)
+                        rec_count += 1
+                        rec_next_ps += rec_interval
+                        sys.stderr.write(f"\r  rec #{rec_count}: t={t:.4f}ps → {fname}\033[K")
+                        sys.stderr.flush()
+                    elif t > rec_end:
+                        rec_next_ps = None  # done recording
+                        sys.stderr.write(f"\n  Recording complete: {rec_count} snapshots in {rec_dir}/\n")
+                        sys.stderr.flush()
             else:
                 if key or needs_redraw[0]:
                     E1, E2 = sim.get_fields()
