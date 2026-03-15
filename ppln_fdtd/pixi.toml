@@ -1,0 +1,19 @@
+[workspace]
+authors = ["Tom Soulanille <soul@prama.com>"]
+channels = ["conda-forge"]
+name = "ppln_fdtd"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+run = "python main.py"
+
+[dependencies]
+python = ">=3.11"
+numpy = ">=1.26"
+matplotlib = ">=3.8"
+scipy = ">=1.12"
+cuda-nvrtc = ">=13.0"
+
+[pypi-dependencies]
+cupy-cuda13x = ">=14.0"
