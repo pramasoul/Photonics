@@ -139,7 +139,7 @@ class FDTDSimulation:
         boost: float = 1.0,
         peak_intensity_W_cm2: float = 1e9,
         ppw: int = 20,
-        mr_interval: int = 100,
+        mr_interval: int = 0,
         poling_period_m: float | None = None,
     ):
         self.lambda_fund_um = lambda_fund_um
