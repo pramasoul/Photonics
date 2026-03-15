@@ -22,6 +22,8 @@ extern "C" __global__
 void fdtd_step(
     double* __restrict__ E1, double* __restrict__ H1,
     double* __restrict__ E2, double* __restrict__ H2,
+    double* __restrict__ E1_prev,   // E1 from previous step (n-1)
+    double* __restrict__ E2_prev,   // E2 from previous step (n-1)
     const double* __restrict__ inv_eps1,
     const double* __restrict__ inv_eps2,
     const double* __restrict__ d_z,
@@ -31,8 +33,6 @@ void fdtd_step(
     double nl_coeff1,       // chi2 / (2*n1^2)  (back-conv, MR-matched)
     double mr_c1,           // eps1 / omega1
     double mr_c2,           // eps2 / omega2
-    double omega1,          // fundamental angular frequency
-    double omega2,          // SH angular frequency
     double mur_coeff,
     double src_val,
     int src_idx,
@@ -55,7 +55,7 @@ void fdtd_step(
     }
     __syncthreads();
 
-    // ── E update (standard Yee) ──
+    // ── E update (standard Yee) → gives E^{n+1} ──
     if (i >= 1 && i < Nz) {
         E1[i] += inv_eps1[i] * (H1[i] - H1[i - 1]);
         E2[i] += inv_eps2[i] * (H2[i] - H2[i - 1]);
@@ -68,32 +68,28 @@ void fdtd_step(
     }
     __syncthreads();
 
-    // ── Nonlinear coupling with MR projection ──
-    // Both sources computed from same pre-coupling state (simultaneous)
-    // Then project onto Manley-Rowe manifold
+    // ── First-order ΔP_NL coupling + MR projection ──
+    // ΔE₂ = -χ⁽²⁾d(E₁_new² - E₁_old²)/n₂²  (correct for 1st-order Yee)
     if (i >= cs && i < ce) {
         double d = d_z[i];
         double e1 = E1[i];   // post-Yee, pre-coupling
         double e2 = E2[i];
 
-        // Compute both sources from same state
+        // Both sources from same pre-coupling state
         double dE1sq = e1 * e1 - e1_old * e1_old;
-        double dE2E1 = e2 * (e1 - e1_old);  // uses pre-coupling e2
+        double dE2E1 = e2 * (e1 - e1_old);
 
         double src2 = -nl_coeff2 * d * dE1sq;
         double src1 = -nl_coeff1 * d * dE2E1;
 
-        // Tentative update
         double e1_tent = e1 + src1;
         double e2_tent = e2 + src2;
 
-        // Manley-Rowe projection: enforce ε₁E₁²/ω₁ + ε₂E₂²/ω₂ = const
-        // (photon number conservation; total energy correctly INCREASES)
+        // MR projection: enforce ε₁E₁²/ω₁ + ε₂E₂²/ω₂ = const per cell
         double mr_before = mr_c1 * e1 * e1 + mr_c2 * e2 * e2;
         double mr_after  = mr_c1 * e1_tent * e1_tent + mr_c2 * e2_tent * e2_tent;
         double dmr = mr_after - mr_before;
 
-        // Correct E₁ to absorb MR violation (clamped for stability)
         double e1sq = e1_tent * e1_tent;
         if (e1sq > 1e-30) {
             double corr = 0.5 * dmr / (mr_c1 * e1sq);
@@ -273,6 +269,8 @@ class FDTDSimulation:
         self.H1 = cp.zeros(self.Nz, dtype=cp.float64)
         self.E2 = cp.zeros(self.Nz, dtype=cp.float64)
         self.H2 = cp.zeros(self.Nz, dtype=cp.float64)
+        self.E1_prev = cp.zeros(self.Nz, dtype=cp.float64)
+        self.E2_prev = cp.zeros(self.Nz, dtype=cp.float64)
 
     def rebuild_poling(self, Lambda):
         self.Lambda = Lambda
@@ -325,6 +323,7 @@ class FDTDSimulation:
         grid, block = (self._grid,), (self._block,)
         E1, H1 = self.E1, self.H1
         E2, H2 = self.E2, self.H2
+        E1p, E2p = self.E1_prev, self.E2_prev
         inv_eps1, inv_eps2 = self.inv_eps1, self.inv_eps2
         d_z = self.d_z
         mp = self._mur_prev
@@ -354,10 +353,9 @@ class FDTDSimulation:
             src = E0 * np.exp(t_src * t_src * inv_2sig2) * np.sin(omega1 * t)
 
             kernel(grid, block,
-                   (E1, H1, E2, H2,
+                   (E1, H1, E2, H2, E1p, E2p,
                     inv_eps1, inv_eps2, d_z, mp,
-                    ch, nl2, nl1, mrc1, mrc2,
-                    self.omega1, self.omega2, mc, src,
+                    ch, nl2, nl1, mrc1, mrc2, mc, src,
                     si, cs, ce, nz))
 
             self.n_step += 1
