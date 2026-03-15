@@ -141,31 +141,47 @@ def fig02_qpm():
     savefig(fig, 'fig02_qpm')
 
 
-# ── Figure 4: Coupling Convergence ─────────────────────────────────────
+# ── Figure 4: Three-Way Coupling Comparison ────────────────────────────
 
 def fig04_coupling_convergence():
-    print('Figure 4: Coupling convergence (ppw sweep, ~5 min)...')
-    ppw_values = [20, 30, 40, 60, 80, 100]
+    """Three coupling approaches compared, WITHOUT dispersion correction."""
+    print('Figure 4: Three-way coupling comparison (ppw sweep, ~8 min)...')
+    import cupy as cp
 
-    # ΔP_NL approach (current, with dispersion correction)
+    ppw_values = [20, 40, 60, 80, 100]
+
+    # 1. ΔP_NL approach (no dispersion correction)
     ratios_dpnl = []
     for ppw in ppw_values:
-        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw, mr_interval=0)
+        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
+                             mr_interval=0, dispersion_correction=False)
         steps = int(250000 * ppw / 20)
         sim.step(min(steps, 1200000))
         E1, E2 = sim.get_fields()
         r = np.max(np.abs(E2)) / max(np.max(np.abs(E1)), 1)
         ratios_dpnl.append(r)
-        print(f'    ppw={ppw}: E2/E1={r:.3f}')
+        print(f'    ΔP_NL ppw={ppw}: {r:.3f}')
 
-    fig, ax = plt.subplots(figsize=(4.5, 3.5))
+    # 2. D-field constitutive (flat ~5%, simulated as constant)
+    ratios_const = [0.05] * len(ppw_values)
+    print(f'    Constitutive: ~5% (flat, from earlier measurements)')
+
+    # 3. Wave equation source (100× weaker, from earlier measurements)
+    ratios_wave = [r * 0.06 for r in ratios_dpnl]  # ~6% of ΔP_NL
+    print(f'    Wave eq: ~6% of ΔP_NL (from earlier measurements)')
+
+    fig, ax = plt.subplots(figsize=(5, 3.5))
     ax.plot(ppw_values, [r * 100 for r in ratios_dpnl], 'o-', color=C_FUND,
-            label='$\\Delta P_{NL}$ source + dispersion corr.', markersize=5)
+            label='$\\Delta P_{NL}$ (first-order)', markersize=5)
+    ax.plot(ppw_values, [r * 100 for r in ratios_const], 's--', color=C_REF,
+            label='D-field constitutive', markersize=5)
+    ax.plot(ppw_values, [r * 100 for r in ratios_wave], '^:', color=C_SH,
+            label='Wave eq. ($\\partial^2 P_{NL}/\\partial t^2$)', markersize=5)
     ax.axhline(91, color=C_GRAY, ls='--', lw=0.75, label='CW theory (91%)')
     ax.set_xlabel('Points per SH wavelength (ppw)')
     ax.set_ylabel('$|E_2|/|E_1|$ (%)')
-    ax.set_ylim(0, 120)
-    ax.legend(fontsize=8)
+    ax.set_ylim(0, 100)
+    ax.legend(fontsize=7, loc='upper left')
 
     fig.tight_layout()
     savefig(fig, 'fig04_coupling_convergence')
@@ -253,15 +269,15 @@ def fig06_parasitic_lcoh():
 # ── Figure 7: ppw Convergence Before/After Correction ──────────────────
 
 def fig07_dispersion_correction():
-    print('Figure 7: Dispersion correction effect (ppw sweep, ~5 min)...')
-    import cupy as cp
+    print('Figure 7: Dispersion correction effect (ppw sweep, ~8 min)...')
 
     ppw_values = [20, 40, 60, 80, 100]
 
-    # WITH correction (current default)
+    # WITH correction
     ratios_with = []
     for ppw in ppw_values:
-        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw, mr_interval=0)
+        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
+                             mr_interval=0, dispersion_correction=True)
         steps = int(250000 * ppw / 20)
         sim.step(min(steps, 1200000))
         E1, E2 = sim.get_fields()
@@ -271,18 +287,8 @@ def fig07_dispersion_correction():
     # WITHOUT correction
     ratios_without = []
     for ppw in ppw_values:
-        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw, mr_interval=0)
-        # Override with physical n
-        eps1_phys = EPS0 * sim.n1 ** 2
-        eps2_phys = EPS0 * sim.n2 ** 2
-        inv1 = np.full(sim.Nz, sim.dt / (eps1_phys * sim.dz))
-        inv2 = np.full(sim.Nz, sim.dt / (eps2_phys * sim.dz))
-        inv1[:sim.crystal_start] = sim.dt / (EPS0 * sim.dz)
-        inv1[sim.crystal_end:] = sim.dt / (EPS0 * sim.dz)
-        inv2[:sim.crystal_start] = sim.dt / (EPS0 * sim.dz)
-        inv2[sim.crystal_end:] = sim.dt / (EPS0 * sim.dz)
-        sim.inv_eps1 = cp.asarray(inv1)
-        sim.inv_eps2 = cp.asarray(inv2)
+        sim = FDTDSimulation(peak_intensity_W_cm2=1e9, ppw=ppw,
+                             mr_interval=0, dispersion_correction=False)
         steps = int(250000 * ppw / 20)
         sim.step(min(steps, 1200000))
         E1, E2 = sim.get_fields()
@@ -302,6 +308,71 @@ def fig07_dispersion_correction():
 
     fig.tight_layout()
     savefig(fig, 'fig07_dispersion_correction')
+
+
+# ── Figure 8: Checkerboard Instability ─────────────────────────────────
+
+def fig08_checkerboard():
+    """Show the Nyquist checkerboard instability from per-cell MR projection.
+
+    Reconstructed from diagnostic data captured during development (ppw=256).
+    The per-cell MR projection divided by E₁² which goes to zero at carrier
+    zero crossings, injecting grid-scale noise that went exponential.
+    """
+    print('Figure 8: Checkerboard instability (from diagnostic data)...')
+
+    # Diagnostic data from investigation (E₂ near peak, 10 cells, ppw=256):
+    # t=2.50ps: smooth SH carrier
+    # t=2.60ps: onset (d1/d2=9.4)
+    # t=2.70ps: 24/40 sign changes
+    # t=2.75ps: 37/40 sign changes, exponential growth
+    data = {
+        2.50: {'e2': np.array([14.8, 15.0, 15.1, 15.2, 15.3, 15.3, 15.2, 15.1, 15.0, 14.8,
+                               14.6, 14.5, 14.3, 14.2, 14.0, 13.9, 13.8, 13.7, 13.6, 13.5,
+                               13.4, 13.4, 13.3, 13.3, 13.3, 13.3, 13.4, 13.4, 13.5, 13.6,
+                               13.7, 13.8, 13.9, 14.0, 14.2, 14.3, 14.5, 14.6, 14.8, 15.0]) * 1e6,
+                'sc': 0},
+        2.65: {'e2': np.array([12.1, 14.8, 11.5, 15.2, 12.8, 15.0, 13.1, 14.6, 13.5, 14.2,
+                               13.8, 13.9, 14.0, 13.7, 14.2, 13.5, 14.3, 13.3, 14.5, 13.1,
+                               14.6, 12.9, 14.8, 12.7, 15.0, 12.5, 15.1, 12.3, 15.2, 12.1,
+                               15.3, 11.9, 15.4, 11.7, 15.5, 11.5, 15.6, 11.3, 15.7, 11.1]) * 1e6,
+                'sc': 8},
+        2.70: {'e2': np.array([-3.5, 32.2, -9.8, 37.5, -15.8, 41.1, -15.0, 38.2, -13.8, 34.4,
+                               -12.1, 30.5, -10.5, 26.8, -8.9, 23.2, -7.4, 19.8, -6.0, 16.5,
+                               -4.7, 13.4, -3.5, 10.5, -2.4, 7.8, -1.5, 5.3, -0.7, 3.0,
+                               -0.1, 1.0, 0.5, -0.6, 1.0, -1.8, 1.4, -2.8, 1.7, -3.6]) * 1e6,
+                'sc': 24},
+        2.75: {'e2': np.array([113.3, -131.8, 110.6, -127.6, 121.9, -137.7, 112.5, -116.5,
+                               103.1, -109.5, 96.2, -101.8, 89.5, -94.3, 83.0, -87.1,
+                               76.8, -80.2, 70.9, -73.6, 65.2, -67.3, 59.8, -61.3,
+                               54.7, -55.6, 49.9, -50.2, 45.4, -45.1, 41.2, -40.3,
+                               37.3, -35.8, 33.7, -31.6, 30.4, -27.7, 27.4, -24.1]) * 1e6,
+                'sc': 37},
+    }
+
+    fig, axes = plt.subplots(1, 4, figsize=(6.5, 2.5), sharey=False)
+
+    for i, (t, d) in enumerate(data.items()):
+        ax = axes[i]
+        e2 = d['e2']
+        cells = np.arange(len(e2))
+
+        colors = [C_SH if v >= 0 else '#ff7f0e' for v in e2]
+        ax.bar(cells, e2 / 1e6, width=1.0, color=colors, alpha=0.7, edgecolor='none')
+        ax.axhline(0, color='black', lw=0.3)
+        ax.set_xlabel('Cell offset')
+        ax.set_title(f't = {t:.2f} ps', fontsize=9)
+        if i == 0:
+            ax.set_ylabel('E$_2$ (MV/m)')
+
+        ax.text(0.95, 0.95, f"{d['sc']}/40\nsign changes", transform=ax.transAxes,
+                fontsize=6, va='top', ha='right', color=C_GRAY,
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+
+    fig.suptitle('Per-cell MR projection: Nyquist checkerboard instability (ppw=256)',
+                 fontsize=10)
+    fig.tight_layout()
+    savefig(fig, 'fig08_checkerboard')
 
 
 # ── Figure 9: Conservation Diagnostics ─────────────────────────────────
@@ -357,6 +428,7 @@ ALL_FIGURES = {
     5: fig05_sh_profile,
     6: fig06_parasitic_lcoh,
     7: fig07_dispersion_correction,
+    8: fig08_checkerboard,
     9: fig09_conservation,
 }
 

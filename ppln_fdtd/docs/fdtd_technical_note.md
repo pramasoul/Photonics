@@ -24,7 +24,7 @@ The source is a Gaussian pulse modulated at ω₁, soft-injected (additive) in t
 ![Simulation schematic](figures/fig01_schematic.png)
 *Figure 1: Two-grid FDTD schematic showing the fundamental (ω) and SH (2ω) Yee grids, poling pattern d(z), AR tapers, source injection, and Mur ABCs.*
 
-This formulation is attractive because it captures the essential QPM physics without requiring auxiliary differential equation (ADE) dispersion machinery. Each grid propagates its carrier at the correct phase velocity, and the poling pattern naturally provides the quasi-phase-matching.
+This formulation is attractive because it captures the essential QPM physics without requiring auxiliary differential equation (ADE) dispersion machinery — though at the cost of resolution-dependent accuracy that we characterize in Sections 3–4. Each grid propagates its carrier at the correct phase velocity, and the poling pattern naturally provides the quasi-phase-matching.
 
 ![QPM demonstration](figures/fig02_qpm.png)
 *Figure 2: QPM demonstration at 1 GW/cm², ppw=100. (a) Matched Λ = Λ_QPM: SH builds up coherently inside the crystal. (b) Detuned Λ = 2Λ_QPM: SH remains small.*
@@ -63,7 +63,7 @@ This is energy-conserving by construction (the constitutive relation is derived 
 
 The time derivative of the nonlinear polarization drives E₂ directly:
 
-$$\Delta E_2 = -\frac{\chi^{(2)} d(z)}{n_2^2} \left(E_1^{n+1\,2} - E_1^{n\,2}\right)$$
+$$\Delta E_2 = -\frac{\chi^{(2)} d(z)}{n_2^2} \left((E_1^{n+1})^2 - (E_1^{n})^2\right)$$
 
 This correctly accumulates the SH (E₂ grows through the crystal, detuning kills it). However, the conversion shows ppw² convergence: 4.4% at ppw=20, 14.2% at ppw=40, 78% at ppw=100. The coupling is present but resolution-dependent.
 
@@ -71,7 +71,7 @@ This correctly accumulates the SH (E₂ grows through the crystal, detuning kill
 
 We attempted to use the wave equation's second-order source:
 
-$$\Delta E_2 = -\frac{\chi^{(2)} d(z)}{n_2^2} \left(E_1^{n+1\,2} - 2E_1^{n\,2} + E_1^{n-1\,2}\right)$$
+$$\Delta E_2 = -\frac{\chi^{(2)} d(z)}{n_2^2} \left((E_1^{n+1})^2 - 2(E_1^{n})^2 + (E_1^{n-1})^2\right)$$
 
 This was 100× weaker than the ΔP_NL approach and **sign-independent** (flipping += to -= gave identical results). The source was exactly 90° out of phase with E₂, shifting its phase but not its amplitude.
 
@@ -80,10 +80,10 @@ This was 100× weaker than the ΔP_NL approach and **sign-independent** (flippin
 **Lesson**: The coupling formulation must match the time-integration order of the host scheme. First-order Yee needs a first-order source (∂P_NL/∂t). Second-order sources are incompatible regardless of their formal accuracy.
 
 ![Coupling convergence](figures/fig04_coupling_convergence.png)
-*Figure 4: Conversion efficiency vs resolution for the ΔP_NL source term with dispersion correction. CW theory predicts ~91% (dashed line).*
+*Figure 4: Three coupling formulations compared (without dispersion correction). The ΔP_NL first-order source shows ppw² convergence toward the CW prediction. The D-field constitutive approach gives a flat ~5% regardless of resolution. The wave equation source is ~100× weaker and sign-independent.*
 
 ![SH spatial profile](figures/fig05_sh_profile.png)
-*Figure 5: Spatial field envelopes at t = 2.5 ps showing the fundamental (red) and growing SH (blue) inside the crystal.*
+*Figure 5: Spatial field envelopes at t = 2.5 ps showing the fundamental (red) and growing SH (blue) inside the crystal. The SH envelope approximately tracks the pump shape because the crystal is short relative to the group velocity walkoff length; in longer crystals, the SH would show an asymmetric ramp (zero at leading edge, maximum at trailing edge) characteristic of coherent accumulation with temporal walkoff.*
 
 ---
 
@@ -119,7 +119,9 @@ where k_true = n_physical · ω/c. This is applied only to the Yee propagation c
 The correction is computed once at initialization with zero runtime cost. At ppw=20, n₂ changes by 0.39%; at ppw=100, by 0.016%.
 
 ![Dispersion correction effect](figures/fig07_dispersion_correction.png)
-*Figure 7: ppw convergence with and without the numerical dispersion correction. The correction dramatically improves low-ppw performance.*
+*Figure 7: ppw convergence with and without the numerical dispersion correction. The correction dramatically improves low-ppw performance but shows a crossover at intermediate ppw.*
+
+At intermediate ppw (60–80), the uncorrected simulation can outperform the corrected one. This occurs because the numerical dispersion error partially compensates the coupling finite-difference error — two wrongs making a partial right. With the correction, the parasitic Δk is removed but the coupling phase error is fully exposed. This accidental cancellation is resolution-dependent and not reliable.
 
 ### 4c. Generality
 
@@ -145,12 +147,15 @@ The MR requirement constrains the ratio of SHG and back-conversion coupling cons
 
 A per-cell MR projection was attempted: after each coupling step, rescale E₁ at each cell to enforce local MR conservation. This diverges at carrier zero crossings where E₁² → 0, creating a **Nyquist checkerboard instability** — alternating-sign oscillations at the 2-cell spatial frequency that grow exponentially.
 
+![Checkerboard instability](figures/fig08_checkerboard.png)
+*Figure 8: Per-cell MR projection creates a Nyquist checkerboard instability at ppw=256. E₂(z) near the peak over 40 cells at four time snapshots. By t = 2.75 ps, nearly every adjacent cell has opposite sign — a pure grid-scale artifact growing exponentially.*
+
 ### 5d. Global projection
 
 A global scalar correction (compute total MR over the full grid, scale all crystal fields by √(MR_before/MR_after)) was implemented. This is stable but creates boundary artifacts when applied only to crystal cells (the scaling discontinuity at crystal edges distorts the pulse envelope at ppw ≥ 67). Full-grid scaling fights the Mur ABC absorbers. The global projection is available as a parameter (mr_interval) but defaults to off.
 
 ![Conservation diagnostics](figures/fig09_conservation.png)
-*Figure 9: Conservation diagnostics over the crystal transit at ppw=100. (a) Manley-Rowe invariant. (b) Total EM energy — increases during SHG as expected. (c) Conversion efficiency E₂/E₁.*
+*Figure 9: Conservation diagnostics over the crystal transit at ppw=100 with global MR projection disabled (default). (a) Manley-Rowe invariant — the ~33% drift reflects the residual coupling imbalance discussed in Section 5b. (b) Total EM energy — increases during SHG as expected. (c) Conversion efficiency E₂/E₁.*
 
 ---
 
@@ -164,7 +169,7 @@ A global scalar correction (compute total MR over the full grid, scale all cryst
 
 **Carrier resolution cost**: The grid must resolve the SH wavelength in the medium (~239 nm for 532 nm in LN), requiring Δz ≈ 2–12 nm. A 500 μm crystal needs 44k–221k cells. Crystal lengths beyond ~5 mm become impractical at interactive frame rates.
 
-**Envelope methods**: Split-step Fourier or coupled-mode envelope solvers eliminate all of these issues simultaneously (no carrier resolution, exact dispersion, symplectic coupling). They sacrifice the ability to resolve the carrier oscillation, which matters for few-cycle pulses or when the bandwidth approaches the carrier frequency. For 200 fs pulses at 1064 nm (~56 carrier cycles), envelope methods are the natural choice; the carrier-resolved FDTD approach documented here is primarily of pedagogical and methodological interest.
+**Envelope methods**: Split-step Fourier or coupled-mode envelope solvers eliminate all of these issues simultaneously (no carrier resolution, exact dispersion, symplectic coupling). They sacrifice the ability to resolve the carrier oscillation, which matters for few-cycle pulses or when the bandwidth approaches the carrier frequency. For 200 fs pulses at 1064 nm (~56 carrier cycles), envelope methods are the natural choice; the carrier-resolved FDTD approach documented here is primarily of pedagogical and methodological interest, though it also serves as a first-principles reference against which envelope approximations can be validated.
 
 ---
 

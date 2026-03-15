@@ -140,6 +140,7 @@ class FDTDSimulation:
         peak_intensity_W_cm2: float = 1e9,
         ppw: int = 20,
         mr_interval: int = 0,
+        dispersion_correction: bool = True,
         poling_period_m: float | None = None,
     ):
         self.lambda_fund_um = lambda_fund_um
@@ -151,6 +152,7 @@ class FDTDSimulation:
         self.peak_intensity_W_cm2 = peak_intensity_W_cm2
         self.ppw = ppw
         self.mr_interval = mr_interval
+        self.dispersion_correction = dispersion_correction
 
         self.n1 = sellmeier_n(lambda_fund_um, T_celsius)
         self.n2 = sellmeier_n(lambda_fund_um / 2.0, T_celsius)
@@ -232,8 +234,12 @@ class FDTDSimulation:
         cs, ce = self.crystal_start, self.crystal_end
 
         # Corrected indices for exact numerical phase velocity at carrier
-        n1_eff = self._corrected_index(self.n1, self.omega1, self.dz, self.dt, self.courant)
-        n2_eff = self._corrected_index(self.n2, self.omega2, self.dz, self.dt, self.courant)
+        if self.dispersion_correction:
+            n1_eff = self._corrected_index(self.n1, self.omega1, self.dz, self.dt, self.courant)
+            n2_eff = self._corrected_index(self.n2, self.omega2, self.dz, self.dt, self.courant)
+        else:
+            n1_eff = self.n1
+            n2_eff = self.n2
 
         eps1 = np.full(Nz, EPS0, dtype=np.float64)
         eps2 = np.full(Nz, EPS0, dtype=np.float64)
