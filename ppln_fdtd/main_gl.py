@@ -242,11 +242,16 @@ def main():
             # ── Simulate ──
             if not paused:
                 sim.step(steps_per_frame)
-
-            # ── Render ──
-            E1, E2 = sim.get_fields()
-            renderer.render(E1, E2)
-            glfw.swap_buffers(window)
+                E1, E2 = sim.get_fields()
+                renderer.render(E1, E2)
+                glfw.swap_buffers(window)
+            else:
+                # When paused, only redraw on input; sleep to yield CPU/GPU
+                if key:
+                    E1, E2 = sim.get_fields()
+                    renderer.render(E1, E2)
+                    glfw.swap_buffers(window)
+                time.sleep(0.05)
 
             # ── Terminal status ──
             frame_count += 1
