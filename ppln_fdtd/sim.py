@@ -139,6 +139,7 @@ class FDTDSimulation:
         boost: float = 1.0,
         peak_intensity_W_cm2: float = 1e9,
         ppw: int = 20,
+        mr_interval: int = 100,
         poling_period_m: float | None = None,
     ):
         self.lambda_fund_um = lambda_fund_um
@@ -149,6 +150,7 @@ class FDTDSimulation:
         self.boost = boost
         self.peak_intensity_W_cm2 = peak_intensity_W_cm2
         self.ppw = ppw
+        self.mr_interval = mr_interval
 
         self.n1 = sellmeier_n(lambda_fund_um, T_celsius)
         self.n2 = sellmeier_n(lambda_fund_um / 2.0, T_celsius)
@@ -366,7 +368,7 @@ class FDTDSimulation:
                     si, cs, ce, nz))
 
             # Global MR projection every 100 steps (amortize GPU sync cost)
-            if self.n_step % 100 == 99:
+            if self.mr_interval > 0 and self.n_step % self.mr_interval == self.mr_interval - 1:
                 mr_now = mrc1 * cp.sum(E1 ** 2) + mrc2 * cp.sum(E2 ** 2)
                 if self._mr_cached > 1e-30 and float(mr_now) > 1e-30:
                     ratio = cp.sqrt(self._mr_cached / mr_now)

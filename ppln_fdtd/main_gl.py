@@ -67,6 +67,7 @@ DEFAULTS = dict(
     record_end=None,        # ps, stop recording
     record_interval=0.01,   # ps between snapshots (default 10 fs)
     record_dir='recordings',
+    mr_interval=100,        # global MR projection every N steps
 )
 
 
@@ -149,6 +150,8 @@ def build_parser():
                    help='Interval between snapshots (ps, default 0.01=10fs)')
     p.add_argument('--record-dir', type=str, default=None,
                    help='Directory for snapshot recordings')
+    p.add_argument('--mr-interval', type=int, default=None,
+                   help='Global MR projection every N steps (default 100)')
     return p
 
 
@@ -289,6 +292,7 @@ def main():
         boost=cfg['boost'],
         peak_intensity_W_cm2=cfg['peak_intensity'],
         ppw=cfg['ppw'],
+        mr_interval=cfg['mr_interval'],
         pulse_width_fs=cfg['pulse_width'],
         poling_period_m=poling_m,
     )
