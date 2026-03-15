@@ -204,7 +204,8 @@ def print_status(sim, steps_per_frame, fps, paused, show_help, energy_info, rend
     lines = [
         f"  PPLN 1D FDTD Explorer          {'[PAUSED]' if paused else ''}",
         f"  ────────────────────────────────────────────────────────────────",
-        f"  t = {sim.current_time_ps:8.2f} ps     fps = {fps:5.1f}     steps/frame = {steps_per_frame}",
+        f"  t = {sim.current_time_ps:8.2f} ps     fps = {fps:5.1f}     steps/frame = {steps_per_frame}"
+        f"     total = {sim.n_step:,}",
         f"  Λ = {sim.Lambda*1e6:7.2f} μm      Λ_QPM = {Lambda_qpm*1e6:.2f} μm     Δk = {dk*1e-6:.1f} /mm"
         f"     domains = {n_domains}",
         f"  T = {sim.T:5.0f} °C       boost = {sim.boost:.0f}×            pulse = {sim.pulse_width_s*1e15:.0f} fs"

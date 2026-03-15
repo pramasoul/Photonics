@@ -3,13 +3,13 @@ crystal_length: 500.0     # μm
 temperature: 25.0         # °C
 boost: 1.0
 peak_intensity: 1.0e9     # W/cm² (1 GW/cm²)
-ppw: 40                   # points per SH wavelength (20=fast, 80=accurate)
+ppw: 100                   # points per SH wavelength (20=fast, 80=accurate)
 pulse_width: 200.0        # fs
 poling_period: null        # μm, null = auto QPM
-steps_per_frame: 500
+steps_per_frame: 2500
 R_pump: 0.0               # 0 = AR coated
 R_sh: 0.0
-spec_ref: 23.0             # log10(power), top of spectrum display
+spec_ref: 24.0             # log10(power), top of spectrum display
 spec_decades: 16.0
 width: 1600
 height: 800
