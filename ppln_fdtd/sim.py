@@ -11,7 +11,7 @@ The entire FDTD step is a single CUDA kernel.
 
 import cupy as cp
 import numpy as np
-from materials import sellmeier_n, make_poling_pattern, D33, qpm_period
+from materials import sellmeier_n, make_poling_pattern, D33, qpm_period, group_velocity
 
 C = 2.998e8
 MU0 = 4e-7 * np.pi
@@ -163,12 +163,18 @@ class FDTDSimulation:
         self.dz = lambda_min / ppw
         self.dt = self.dz * courant / C
 
-        margin = 0.03 * crystal_length_m
-        total_length = crystal_length_m + 2 * margin
+        # Left margin: small, just room for source
+        margin_left = 0.03 * crystal_length_m
+        # Right margin: enough for pulse + GVM walkoff to fully exit
+        gvm_walkoff = abs(1.0 / group_velocity(lambda_fund_um / 2, T_celsius)
+                        - 1.0 / group_velocity(lambda_fund_um, T_celsius)) * crystal_length_m * C
+        pulse_spatial = C * self.pulse_width_s * 4  # 4σ
+        margin_right = max(margin_left, pulse_spatial + gvm_walkoff) * 1.5
+        total_length = crystal_length_m + margin_left + margin_right
         self.Nz = int(np.ceil(total_length / self.dz))
         self.z = cp.arange(self.Nz) * self.dz
 
-        self.crystal_start = int(np.round(margin / self.dz))
+        self.crystal_start = int(np.round(margin_left / self.dz))
         self.crystal_end = self.crystal_start + int(np.round(crystal_length_m / self.dz))
         self.crystal_mask = cp.zeros(self.Nz, dtype=cp.float64)
         self.crystal_mask[self.crystal_start:self.crystal_end] = 1.0
