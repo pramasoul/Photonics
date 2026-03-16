@@ -1,0 +1,28 @@
+# PPLN SSFM envelope solver — default parameters
+
+# Wavelength and material
+lambda_fund_um: 1.064
+temperature_C: 25.0
+crystal_length_um: 500.0
+
+# Pulse
+peak_intensity_W_cm2: 1.0e9
+pulse_width_fs: 200.0
+boost: 1.0
+
+# Grid
+Nt: 512
+T_window_ps: 2.0
+
+# Spatial stepping
+poling_mode: deff          # 'deff' (Option A) or 'explicit' (Option B)
+dz_um: 2.0
+
+# QPM
+poling_period_um: null     # null = auto from Sellmeier
+
+# OPO (when enabled)
+opo_enabled: false
+R_signal: 0.9
+N_round_trips: 500
+pump_mode: pulsed          # 'cw' or 'pulsed'
