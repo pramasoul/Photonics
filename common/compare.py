@@ -101,47 +101,53 @@ def run_comparison(
         ppw=ppw,
     )
 
-    # Run until pulse exits crystal
+    # Run until pulse fully exits crystal into vacuum
+    # (spatial profile in vacuum = frozen temporal profile)
     margin_steps = int((fdtd.crystal_start - fdtd.source_idx) / fdtd.courant)
     xtal_steps = int((fdtd.crystal_end - fdtd.crystal_start) / (fdtd.courant / fdtd.n1))
     source_steps = int(fdtd.t0 / fdtd.dt)
-    total = source_steps + margin_steps + xtal_steps + int(xtal_steps * 0.1)
+    # Extra: let pulse clear the crystal exit + one pulse width into vacuum
+    pulse_cells = int(pulse_width_fs * 1e-15 * C / fdtd.dz * 4)
+    exit_margin = int(pulse_cells / fdtd.courant)
+    total = source_steps + margin_steps + xtal_steps + exit_margin
     fdtd.step(total)
     t_fdtd = time.perf_counter() - t0
 
     E1, E2 = fdtd.get_fields()
+
+    # In vacuum after crystal: E² gives intensity envelope directly
+    # Use Hilbert to get smooth envelope of the carrier
+    from scipy.signal import hilbert as scipy_hilbert
+    env1_sq = np.abs(scipy_hilbert(E1)) ** 2  # |analytic(E₁)|²
+    env2_sq = np.abs(scipy_hilbert(E2)) ** 2
+
+    conv_fdtd = np.sqrt(np.max(env2_sq)) / max(np.sqrt(np.max(env1_sq)), 1e-30)
+
+    # Map z → t: in vacuum, v = c (both grids propagate at c outside crystal)
+    # t = z / c, centered on peak of E₁ envelope
     z_m = fdtd.get_z_host() * 1e-6
+    peak_idx = np.argmax(env1_sq)
+    t_from_z = (z_m - z_m[peak_idx]) / C  # seconds, centered on pump peak
 
-    # Extract spatial envelopes
-    A1_fdtd = extract_envelope(E1, z_m, omega1, n1, fdtd.dz)
-    A2_fdtd = extract_envelope(E2, z_m, omega2, n2, fdtd.dz)
+    # Properly resample onto SSFM grid with anti-aliasing
+    # Decimate: average over bins that map to each SSFM time point
+    t_ssfm_grid = ssfm.t_grid
+    dt_ssfm = ssfm.dt
+    I1_resampled = np.zeros(len(t_ssfm_grid))
+    I2_resampled = np.zeros(len(t_ssfm_grid))
 
-    conv_fdtd = np.max(np.abs(A2_fdtd)) / max(np.max(np.abs(A1_fdtd)), 1e-30)
-
-    # Convert spatial envelope A(z) to temporal A(t) on a grid matching SSFM
-    # z → t via t = (z - z_peak) / vg, then resample onto SSFM t_grid
-    env1 = np.abs(A1_fdtd)
-    peak_idx = np.argmax(env1)
-    z_peak = z_m[peak_idx]
-
-    # Map z to time in co-moving frame at vg1
-    t_from_z = (z_m - z_peak) / vg1  # seconds
-    dt_fdtd = fdtd.dz / vg1
-
-    # Resample both envelopes onto the SSFM temporal grid
-    t_ssfm_grid = ssfm.t_grid  # seconds
-    At1_resampled = np.interp(t_ssfm_grid, t_from_z, np.abs(A1_fdtd), left=0, right=0)
-    # SH has different group velocity — offset by GVM
-    t_from_z_sh = (z_m - z_peak) / vg2 + (1/vg2 - 1/vg1) * z_peak
-    At2_resampled = np.interp(t_ssfm_grid, t_from_z_sh, np.abs(A2_fdtd), left=0, right=0)
+    for i, t_center in enumerate(t_ssfm_grid):
+        # Find all FDTD points within this SSFM time bin
+        mask = (t_from_z >= t_center - dt_ssfm / 2) & (t_from_z < t_center + dt_ssfm / 2)
+        if np.any(mask):
+            I1_resampled[i] = np.mean(env1_sq[mask])
+            I2_resampled[i] = np.mean(env2_sq[mask])
 
     results['fdtd'] = {
         't_ps': t_ssfm_grid * 1e12,
-        'I1': At1_resampled ** 2,
-        'I2': At2_resampled ** 2,
-        'A1_spatial': A1_fdtd,
-        'A2_spatial': A2_fdtd,
-        'dt': ssfm.dt,  # resampled to SSFM grid
+        'I1': I1_resampled,
+        'I2': I2_resampled,
+        'dt': dt_ssfm,
         'conv': conv_fdtd,
         'time_s': t_fdtd,
         'steps': total,
@@ -203,13 +209,11 @@ def plot_comparison(results):
     ax.set_ylim(1e-6, 2)
     ax.legend(fontsize=8)
 
-    # ── Bottom right: FDTD spectrum (from resampled temporal envelope) ──
+    # ── Bottom right: FDTD spectrum (from resampled envelope) ──
     ax = axes[1, 1]
-    # Reconstruct complex envelope from intensity (use spatial phase)
-    # For spectral comparison, FFT the resampled intensity profile
-    # (loses phase info but shows bandwidth correctly)
-    A1_t = np.sqrt(fdtd['I1']).astype(np.complex128)
-    A2_t = np.sqrt(fdtd['I2']).astype(np.complex128)
+    # FFT of sqrt(intensity) gives the amplitude spectrum
+    A1_t = np.sqrt(np.maximum(fdtd['I1'], 0)).astype(np.complex128)
+    A2_t = np.sqrt(np.maximum(fdtd['I2'], 0)).astype(np.complex128)
     Nfft_f = ssfm['Nt'] * 4
     freq_f = np.fft.fftshift(np.fft.fftfreq(Nfft_f, d=fdtd['dt'])) * 1e-12
     S1f = np.abs(np.fft.fftshift(np.fft.fft(A1_t, n=Nfft_f))) ** 2
