@@ -16,6 +16,8 @@ from materials import sellmeier_n, make_poling_pattern, D33, qpm_period, group_v
 C = 2.998e8
 MU0 = 4e-7 * np.pi
 EPS0 = 8.854e-12
+# FWHM of intensity → σ of field envelope: σ = FWHM / (2√(2ln2))
+_FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
 _KERNEL_SRC = r"""
 extern "C" __global__
@@ -147,7 +149,8 @@ class FDTDSimulation:
         self.T = T_celsius
         self.crystal_length = crystal_length_m
         self.courant = courant
-        self.pulse_width_s = pulse_width_fs * 1e-15
+        self.pulse_width_s = pulse_width_fs * 1e-15  # FWHM of intensity
+        self.sigma_t = self.pulse_width_s * _FWHM_TO_SIGMA  # σ of field envelope
         self.boost = boost
         self.peak_intensity_W_cm2 = peak_intensity_W_cm2
         self.ppw = ppw
@@ -168,7 +171,7 @@ class FDTDSimulation:
         # Right margin: enough for pulse + GVM walkoff to fully exit
         gvm_walkoff = abs(1.0 / group_velocity(lambda_fund_um / 2, T_celsius)
                         - 1.0 / group_velocity(lambda_fund_um, T_celsius)) * crystal_length_m * C
-        pulse_spatial = C * self.pulse_width_s * 4  # 4σ
+        pulse_spatial = C * self.sigma_t * 4  # 4σ
         margin_right = max(margin_left, pulse_spatial + gvm_walkoff) * 1.5
         total_length = crystal_length_m + margin_left + margin_right
         self.Nz = int(np.ceil(total_length / self.dz))
@@ -202,7 +205,7 @@ class FDTDSimulation:
 
         I_W_m2 = self.peak_intensity_W_cm2 * 1e4
         self.E0 = np.sqrt(2.0 * I_W_m2 / (self.n1 * EPS0 * C))
-        self.t0 = 4.0 * self.pulse_width_s
+        self.t0 = 4.0 * self.sigma_t
 
         self.probe_enabled = False
         self.probe_idx = self.crystal_end + 10
@@ -309,7 +312,8 @@ class FDTDSimulation:
 
     def update_pulse_width(self, pw_fs):
         self.pulse_width_s = pw_fs * 1e-15
-        self.t0 = 4.0 * self.pulse_width_s
+        self.sigma_t = self.pulse_width_s * _FWHM_TO_SIGMA
+        self.t0 = 4.0 * self.sigma_t
 
     def reset(self):
         self._alloc_fields()
@@ -360,7 +364,7 @@ class FDTDSimulation:
         omega1 = self.omega1
         E0 = self.E0
         t0 = self.t0
-        inv_2sig2 = -1.0 / (2.0 * self.pulse_width_s ** 2)
+        inv_2sig2 = -1.0 / (2.0 * self.sigma_t ** 2)
 
         probe_vals = []
         mrc1 = self._mr_c1

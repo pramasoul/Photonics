@@ -279,7 +279,8 @@ def save_snapshot(sim):
              n_step=sim.n_step,
              E0=sim.E0,
              energy=sim.get_energy(),
-             mr=sim.get_manley_rowe())
+             mr=sim.get_manley_rowe(),
+             lambda_fund_um=sim.lambda_fund_um)
     sys.stdout.write(f"\r  >> Snapshot saved to {SNAPSHOT_PATH}\x1b[K\n")
     sys.stdout.flush()
 
