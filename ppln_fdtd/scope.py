@@ -103,17 +103,28 @@ def plot_snapshot(snap, fig=None):
     ax3.set_ylabel('|FFT|²')
     ax3.legend(loc='upper right', fontsize=7)
 
-    # ── Panel 4: Parameters ──
+    # ── Panel 4: Parameters (matching terminal status format) ──
     ax4 = fig.add_subplot(4, 1, 4)
     ax4.axis('off')
-    info = (
-        f"Λ = {Lambda:.2f} μm    Λ_QPM = {Lambda_qpm:.2f} μm    Δk = {dk * 1e-6:.1f} /mm\n"
-        f"T = {T:.0f} °C    boost = {boost:.0f}×    pulse = {pw_fs:.0f} fs\n"
-        f"n₁ = {n1:.4f}    n₂ = {n2:.4f}\n"
-        f"R_pump = {R_pump}    R_sh = {R_sh}\n"
-        f"max|E₁| = {np.max(np.abs(E1)):.4f}    max|E₂| = {np.max(np.abs(E2)):.5f}"
-    )
-    ax4.text(0.05, 0.9, info, transform=ax4.transAxes, fontsize=9,
+
+    # Extract optional fields (may be absent in old snapshots)
+    ppw = snap.get('ppw', '?')
+    peak_I = snap.get('peak_intensity', '?')
+    n_step = snap.get('n_step', '?')
+    E0 = snap.get('E0', '?')
+    energy = snap.get('energy', '?')
+    mr = snap.get('mr', '?')
+    n_domains = int(float(snap.get('dz', 1e-9)) * (ce - cs) / (Lambda * 1e-6 / 2)) if Lambda > 0 else '?'
+
+    lines = []
+    lines.append(f"t = {t_ps:.2f} ps     total = {n_step}     ppw = {ppw}")
+    lines.append(f"Λ = {Lambda:.2f} μm      Λ_QPM = {Lambda_qpm:.2f} μm     Δk = {dk * 1e-6:.1f} /mm     domains = {n_domains}")
+    lines.append(f"T = {T:.0f} °C       boost = {boost:.0f}×            pulse = {pw_fs:.0f} fs     I = {peak_I} W/cm²")
+    lines.append(f"E₀ = {E0} V/m    max|E₁| = {np.max(np.abs(E1)):.2e}   max|E₂| = {np.max(np.abs(E2)):.2e}")
+    lines.append(f"R_pump = {R_pump}    R_sh = {R_sh}")
+    lines.append(f"energy = {energy}     MR = {mr}")
+
+    ax4.text(0.02, 0.95, '\n'.join(lines), transform=ax4.transAxes, fontsize=8,
              fontfamily='monospace', verticalalignment='top')
 
     return fig
