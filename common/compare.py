@@ -112,25 +112,36 @@ def run_comparison(
     E1, E2 = fdtd.get_fields()
     z_m = fdtd.get_z_host() * 1e-6
 
-    # Extract envelopes
+    # Extract spatial envelopes
     A1_fdtd = extract_envelope(E1, z_m, omega1, n1, fdtd.dz)
     A2_fdtd = extract_envelope(E2, z_m, omega2, n2, fdtd.dz)
 
-    # Convert to temporal (co-moving at vg1)
-    t1, At1 = fdtd_to_temporal(A1_fdtd, vg1, fdtd.dz)
-    t2, At2 = fdtd_to_temporal(A2_fdtd, vg2, fdtd.dz)
-
     conv_fdtd = np.max(np.abs(A2_fdtd)) / max(np.max(np.abs(A1_fdtd)), 1e-30)
 
+    # Convert spatial envelope A(z) to temporal A(t) on a grid matching SSFM
+    # z → t via t = (z - z_peak) / vg, then resample onto SSFM t_grid
+    env1 = np.abs(A1_fdtd)
+    peak_idx = np.argmax(env1)
+    z_peak = z_m[peak_idx]
+
+    # Map z to time in co-moving frame at vg1
+    t_from_z = (z_m - z_peak) / vg1  # seconds
+    dt_fdtd = fdtd.dz / vg1
+
+    # Resample both envelopes onto the SSFM temporal grid
+    t_ssfm_grid = ssfm.t_grid  # seconds
+    At1_resampled = np.interp(t_ssfm_grid, t_from_z, np.abs(A1_fdtd), left=0, right=0)
+    # SH has different group velocity — offset by GVM
+    t_from_z_sh = (z_m - z_peak) / vg2 + (1/vg2 - 1/vg1) * z_peak
+    At2_resampled = np.interp(t_ssfm_grid, t_from_z_sh, np.abs(A2_fdtd), left=0, right=0)
+
     results['fdtd'] = {
-        't1_ps': t1 * 1e12,
-        't2_ps': t2 * 1e12,
-        'I1': np.abs(At1) ** 2,
-        'I2': np.abs(At2) ** 2,
-        'A1': At1,
-        'A2': At2,
-        'dt1': t1[1] - t1[0] if len(t1) > 1 else 1e-15,
-        'dt2': t2[1] - t2[0] if len(t2) > 1 else 1e-15,
+        't_ps': t_ssfm_grid * 1e12,
+        'I1': At1_resampled ** 2,
+        'I2': At2_resampled ** 2,
+        'A1_spatial': A1_fdtd,
+        'A2_spatial': A2_fdtd,
+        'dt': ssfm.dt,  # resampled to SSFM grid
         'conv': conv_fdtd,
         'time_s': t_fdtd,
         'steps': total,
@@ -165,19 +176,15 @@ def plot_comparison(results):
     ax.set_ylabel('Intensity (norm.)')
     ax.legend(fontsize=8)
 
-    # ── Top right: FDTD temporal (envelope) ──
+    # ── Top right: FDTD temporal (envelope, resampled to SSFM grid) ──
     ax = axes[0, 1]
     I_sc_f = max(np.max(fdtd['I1']), np.max(fdtd['I2']), 1e-30)
-    # Decimate for plotting
-    dec1 = max(1, len(fdtd['t1_ps']) // 2000)
-    dec2 = max(1, len(fdtd['t2_ps']) // 2000)
-    ax.plot(fdtd['t1_ps'][::dec1], fdtd['I1'][::dec1] / I_sc_f, 'r-', lw=1.5, label='pump')
-    ax.plot(fdtd['t2_ps'][::dec2], fdtd['I2'][::dec2] / I_sc_f, 'b-', lw=1.5, label='SH')
+    ax.plot(fdtd['t_ps'], fdtd['I1'] / I_sc_f, 'r-', lw=1.5, label='pump')
+    ax.plot(fdtd['t_ps'], fdtd['I2'] / I_sc_f, 'b-', lw=1.5, label='SH')
     ax.set_title(f"FDTD ppw={p['ppw']} ({fdtd['time_s']:.1f} s) — |A₂|/|A₁| = {fdtd['conv']:.1%}")
     ax.set_xlabel('Time (ps)')
     ax.set_ylabel('Intensity (norm.)')
     ax.legend(fontsize=8)
-    # Match x-limits to SSFM
     ax.set_xlim(ssfm['t_ps'][0], ssfm['t_ps'][-1])
 
     # ── Bottom left: SSFM spectrum ──
@@ -196,13 +203,17 @@ def plot_comparison(results):
     ax.set_ylim(1e-6, 2)
     ax.legend(fontsize=8)
 
-    # ── Bottom right: FDTD spectrum (from envelope) ──
+    # ── Bottom right: FDTD spectrum (from resampled temporal envelope) ──
     ax = axes[1, 1]
-    # Use same FFT size as SSFM for comparable resolution
-    Nfft_f = min(len(fdtd['A1']), 8192)
-    freq_f = np.fft.fftshift(np.fft.fftfreq(Nfft_f, d=abs(fdtd['dt1']))) * 1e-12
-    S1f = np.abs(np.fft.fftshift(np.fft.fft(fdtd['A1'][:Nfft_f], n=Nfft_f))) ** 2
-    S2f = np.abs(np.fft.fftshift(np.fft.fft(fdtd['A2'][:Nfft_f], n=Nfft_f))) ** 2
+    # Reconstruct complex envelope from intensity (use spatial phase)
+    # For spectral comparison, FFT the resampled intensity profile
+    # (loses phase info but shows bandwidth correctly)
+    A1_t = np.sqrt(fdtd['I1']).astype(np.complex128)
+    A2_t = np.sqrt(fdtd['I2']).astype(np.complex128)
+    Nfft_f = ssfm['Nt'] * 4
+    freq_f = np.fft.fftshift(np.fft.fftfreq(Nfft_f, d=fdtd['dt'])) * 1e-12
+    S1f = np.abs(np.fft.fftshift(np.fft.fft(A1_t, n=Nfft_f))) ** 2
+    S2f = np.abs(np.fft.fftshift(np.fft.fft(A2_t, n=Nfft_f))) ** 2
     Sf_sc = max(np.max(S1f), np.max(S2f), 1e-30)
     ax.semilogy(freq_f, S1f / Sf_sc + 1e-10, 'r-', lw=1.5, label='pump')
     ax.semilogy(freq_f, S2f / Sf_sc + 1e-10, 'b-', lw=1.5, label='SH')
