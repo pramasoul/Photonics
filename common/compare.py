@@ -69,8 +69,17 @@ def run_comparison(
         pulse_width_fs=pulse_width_fs,
         boost=boost,
     )
-    ssfm.propagate_pass()
+    ssfm.propagate_pass(record=True)
     t_ssfm = time.perf_counter() - t0
+
+    # Extract energy vs z from spatial record
+    ssfm_z_um = []
+    ssfm_u1 = []
+    ssfm_u2 = []
+    for z, a1, a2 in ssfm.spatial_record:
+        ssfm_z_um.append(abs(z) * 1e6)
+        ssfm_u1.append(np.sum(np.abs(a1) ** 2) * ssfm.dt)
+        ssfm_u2.append(np.sum(np.abs(a2) ** 2) * ssfm.dt)
 
     results['ssfm'] = {
         't_ps': ssfm.t_grid * 1e12,
@@ -83,6 +92,9 @@ def run_comparison(
         'mr': ssfm.get_manley_rowe(),
         'time_s': t_ssfm,
         'Nt': ssfm.Nt,
+        'energy_z_um': np.array(ssfm_z_um),
+        'energy_U1': np.array(ssfm_u1),
+        'energy_U2': np.array(ssfm_u2),
     }
     print(f'{t_ssfm*1e3:.1f} ms, conv={ssfm.get_conversion():.3f}')
 
@@ -143,6 +155,41 @@ def run_comparison(
             I1_resampled[i] = np.mean(env1_sq[mask])
             I2_resampled[i] = np.mean(env2_sq[mask])
 
+    # Compute energy in each grid over time (integrated envelope²)
+    # ε₀n²/2 × ∫E²dz gives electric field energy; for the envelope, ∝ ∫|A|²dz
+    # We track this by summing envelope² over the grid at intervals during the run
+    # But we've already run... rerun with energy tracking
+    print('  Rerunning FDTD with energy tracking...', end=' ', flush=True)
+    fdtd2 = FDTDSimulation(
+        lambda_fund_um=lambda_fund_um,
+        T_celsius=temperature,
+        crystal_length_m=crystal_length_um * 1e-6,
+        peak_intensity_W_cm2=peak_intensity,
+        pulse_width_fs=pulse_width_fs,
+        boost=boost,
+        ppw=ppw,
+    )
+    import cupy as cp
+    eps0 = 8.854e-12
+    energy_times = []
+    energy_E1 = []
+    energy_E2 = []
+    sample_interval = max(1, total // 200)  # ~200 samples
+    for step in range(0, total, sample_interval):
+        remaining = min(sample_interval, total - fdtd2.n_step)
+        if remaining <= 0:
+            break
+        fdtd2.step(remaining)
+        # Electric field energy: U = (dz/2) × ε₀n² × Σ E²
+        u1 = float(0.5 * fdtd2.dz * cp.sum(
+            cp.asarray(fdtd2.eps1_host) * fdtd2.E1 ** 2))
+        u2 = float(0.5 * fdtd2.dz * cp.sum(
+            cp.asarray(fdtd2.eps2_host) * fdtd2.E2 ** 2))
+        energy_times.append(fdtd2.n_step * fdtd2.dt * 1e12)  # ps
+        energy_E1.append(u1)
+        energy_E2.append(u2)
+    print(f'{len(energy_times)} samples')
+
     results['fdtd'] = {
         't_ps': t_ssfm_grid * 1e12,
         'I1': I1_resampled,
@@ -152,6 +199,9 @@ def run_comparison(
         'time_s': t_fdtd,
         'steps': total,
         'Nz': fdtd.Nz,
+        'energy_t_ps': np.array(energy_times),
+        'energy_E1': np.array(energy_E1),
+        'energy_E2': np.array(energy_E2),
     }
     print(f'{t_fdtd:.1f} s, {total:,} steps, conv={conv_fdtd:.3f}')
 
@@ -165,7 +215,7 @@ def plot_comparison(results):
     fdtd = results['fdtd']
     p = results['params']
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+    fig, axes = plt.subplots(3, 2, figsize=(14, 11))
     fig.suptitle(
         f"SSFM vs FDTD: {p['crystal_length_um']:.0f} μm PPLN, "
         f"{p['peak_intensity']:.0e} W/cm², {p['pulse_width_fs']:.0f} fs, ppw={p['ppw']}",
@@ -226,6 +276,32 @@ def plot_comparison(results):
     ax.set_ylabel('Power (log)')
     ax.set_xlim(-15, 15)
     ax.set_ylim(1e-6, 2)
+    ax.legend(fontsize=8)
+
+    # ── Bottom left: SSFM energy vs position ──
+    ax = axes[2, 0]
+    u_total_s = ssfm['energy_U1'] + ssfm['energy_U2']
+    u_norm_s = max(u_total_s[0], 1e-30)
+    ax.plot(ssfm['energy_z_um'], ssfm['energy_U1'] / u_norm_s, 'r-', lw=1.5, label='pump')
+    ax.plot(ssfm['energy_z_um'], ssfm['energy_U2'] / u_norm_s, 'b-', lw=1.5, label='SH')
+    ax.plot(ssfm['energy_z_um'], u_total_s / u_norm_s, 'k--', lw=1, alpha=0.5, label='total')
+    ax.set_xlabel('Position in crystal (μm)')
+    ax.set_ylabel('Energy (norm.)')
+    ax.set_title('SSFM: energy vs position')
+    ax.legend(fontsize=8)
+
+    # ── Bottom right: FDTD energy vs time ──
+    ax = axes[2, 1]
+    if 'energy_t_ps' in fdtd and len(fdtd['energy_t_ps']) > 0:
+        u_total_f = fdtd['energy_E1'] + fdtd['energy_E2']
+        # Find peak of E1 energy for normalization
+        u_norm_f = max(np.max(fdtd['energy_E1']), 1e-30)
+        ax.plot(fdtd['energy_t_ps'], fdtd['energy_E1'] / u_norm_f, 'r-', lw=1.5, label='pump')
+        ax.plot(fdtd['energy_t_ps'], fdtd['energy_E2'] / u_norm_f, 'b-', lw=1.5, label='SH')
+        ax.plot(fdtd['energy_t_ps'], u_total_f / u_norm_f, 'k--', lw=1, alpha=0.5, label='total')
+    ax.set_xlabel('Simulation time (ps)')
+    ax.set_ylabel('Energy (norm.)')
+    ax.set_title('FDTD: energy vs time')
     ax.legend(fontsize=8)
 
     fig.tight_layout()
