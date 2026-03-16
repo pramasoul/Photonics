@@ -133,6 +133,65 @@ def _omega_to_lambda_um(omega: float) -> float:
     return 2 * np.pi * C / omega * 1e6
 
 
+# ── Envelope extraction from carrier-resolved fields ───────────────────
+
+def extract_envelope(E_field, z_array_m, omega_carrier, n, dz):
+    """Demodulate a carrier-resolved FDTD field to get the complex envelope.
+
+    E(z) ≈ Re[A(z) · exp(i·k·z)]
+
+    Returns the complex envelope A(z) by:
+    1. Hilbert transform to get the analytic signal
+    2. Multiply by exp(-i·k·z) to remove the carrier
+
+    Args:
+        E_field: real-valued field array (numpy, from sim.get_fields())
+        z_array_m: z positions in meters
+        omega_carrier: angular frequency of the carrier (rad/s)
+        n: refractive index at carrier
+        dz: grid spacing (meters)
+
+    Returns:
+        A_envelope: complex envelope array (same length as E_field)
+    """
+    from scipy.signal import hilbert as scipy_hilbert
+
+    # Analytic signal: E + i·H{E}
+    analytic = scipy_hilbert(E_field)
+
+    # Remove carrier: A(z) = analytic(z) · exp(-i·k·z)
+    k = n * omega_carrier / C
+    A = analytic * np.exp(-1j * k * z_array_m)
+
+    return A
+
+
+def fdtd_to_temporal(A_spatial, vg, dz):
+    """Convert spatial envelope A(z) to temporal envelope A(t).
+
+    In a co-moving frame at group velocity vg, the spatial profile
+    maps to a temporal profile via t = -z/vg (leading edge arrives first).
+
+    Args:
+        A_spatial: complex envelope A(z) from extract_envelope
+        vg: group velocity (m/s)
+        dz: spatial grid spacing (m)
+
+    Returns:
+        t_grid: time array (seconds), centered
+        A_temporal: complex envelope A(t)
+    """
+    Nz = len(A_spatial)
+    dt = dz / vg
+    t_grid = np.arange(Nz) * dt
+    t_grid -= t_grid[Nz // 2]  # center
+
+    # Flip z→t (leading edge in z is trailing in t for forward propagation)
+    A_temporal = A_spatial[::-1]
+
+    return t_grid, A_temporal
+
+
 # ── CuPy-dependent utilities (for FDTD only) ──────────────────────────
 
 def make_poling_pattern(z_array, Lambda: float, d33: float, crystal_mask=None):

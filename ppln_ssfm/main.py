@@ -88,7 +88,7 @@ def main():
     t_ps = sim.t_grid * 1e12
     I1 = np.abs(sim.A1) ** 2
     I2 = np.abs(sim.A2) ** 2
-    I_scale = max(np.max(I1), 1e-30)
+    I_scale = max(np.max(I1), np.max(I2), 1e-30)
 
     line_t1, = ax_time.plot(t_ps, I1 / I_scale, 'r-', lw=1.5, label='$|A_1|^2$ ($\\omega$)')
     line_t2, = ax_time.plot(t_ps, I2 / I_scale, 'b-', lw=1.5, label='$|A_2|^2$ ($2\\omega$)')
@@ -98,16 +98,13 @@ def main():
     ax_time.legend(loc='upper right', fontsize=8)
     ax_time.set_xlim(t_ps[0], t_ps[-1])
 
-    # ── Spectral panel ──
-    freq_THz = np.fft.fftshift(np.fft.fftfreq(sim.Nt, d=sim.dt)) * 1e-12
-    # Convert to wavelength offset from carrier
-    omega_offset = np.fft.fftshift(sim.omega_grid)
-    lambda1_nm = 2 * np.pi * C / (sim.omega1 + omega_offset) * 1e9
-    lambda2_nm = 2 * np.pi * C / (sim.omega2 + omega_offset) * 1e9
+    # ── Spectral panel (zero-padded for resolution) ──
+    Nfft = sim.Nt * 4
+    freq_THz = np.fft.fftshift(np.fft.fftfreq(Nfft, d=sim.dt)) * 1e-12
 
-    S1 = np.abs(np.fft.fftshift(np.fft.fft(sim.A1))) ** 2
-    S2 = np.abs(np.fft.fftshift(np.fft.fft(sim.A2))) ** 2
-    S_scale = max(np.max(S1), 1e-30)
+    S1 = np.abs(np.fft.fftshift(np.fft.fft(sim.A1, n=Nfft))) ** 2
+    S2 = np.abs(np.fft.fftshift(np.fft.fft(sim.A2, n=Nfft))) ** 2
+    S_scale = max(np.max(S1), np.max(S2), 1e-30)
 
     line_s1, = ax_spec.semilogy(freq_THz, S1 / S_scale + 1e-10, 'r-', lw=1.5, label='$\\omega$ spectrum')
     line_s2, = ax_spec.semilogy(freq_THz, S2 / S_scale + 1e-10, 'b-', lw=1.5, label='$2\\omega$ spectrum')
@@ -178,7 +175,7 @@ def main():
 
         I1 = np.abs(sim.A1) ** 2
         I2 = np.abs(sim.A2) ** 2
-        I_sc = max(np.max(I1), 1e-30)
+        I_sc = max(np.max(I1), np.max(I2), 1e-30)  # scale to max of BOTH
 
         t_ps = sim.t_grid * 1e12
         line_t1.set_data(t_ps, I1 / I_sc)
@@ -186,10 +183,12 @@ def main():
         ax_time.set_xlim(t_ps[0], t_ps[-1])
         ax_time.set_ylim(0, 1.15)
 
-        S1 = np.abs(np.fft.fftshift(np.fft.fft(sim.A1))) ** 2
-        S2 = np.abs(np.fft.fftshift(np.fft.fft(sim.A2))) ** 2
-        S_sc = max(np.max(S1), 1e-30)
-        freq = np.fft.fftshift(np.fft.fftfreq(sim.Nt, d=sim.dt)) * 1e-12
+        # Zero-padded FFT for spectral resolution (4× padding)
+        Nfft = sim.Nt * 4
+        S1 = np.abs(np.fft.fftshift(np.fft.fft(sim.A1, n=Nfft))) ** 2
+        S2 = np.abs(np.fft.fftshift(np.fft.fft(sim.A2, n=Nfft))) ** 2
+        S_sc = max(np.max(S1), np.max(S2), 1e-30)
+        freq = np.fft.fftshift(np.fft.fftfreq(Nfft, d=sim.dt)) * 1e-12
         line_s1.set_data(freq, S1 / S_sc + 1e-10)
         line_s2.set_data(freq, S2 / S_sc + 1e-10)
         ax_spec.set_xlim(-15, 15)

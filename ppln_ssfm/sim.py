@@ -83,7 +83,10 @@ class SSFMSimulation:
         self.d_eff_ratio = 2.0 / np.pi  # first Fourier coefficient of square wave
 
         # Temporal grid (co-moving frame at v_g1)
-        self.T_window = T_window_ps * 1e-12
+        # Auto-expand window to accommodate GVM walkoff + pulse width
+        gvm_walkoff = abs(self.gvm) * self.L  # seconds of walkoff
+        min_window = (self.pulse_width_s * 4 + gvm_walkoff * 2) * 1.5
+        self.T_window = max(T_window_ps * 1e-12, min_window)
         self.dt = self.T_window / Nt
         self.t_grid = np.arange(Nt) * self.dt - self.T_window / 2  # centered
 
